@@ -9,6 +9,7 @@ from src.database import (
     listar_categorias,
     listar_itens_para_classificacao,
     listar_notas,
+    normalizar_produto_descricao,
     registrar_classificacao_itens,
     seed_categorias_csv,
     salvar_nota,
@@ -100,6 +101,45 @@ def test_seed_categorias_csv_insere_sem_duplicar(tmp_path):
     categorias = listar_categorias(db_path=db_path, apenas_ativos=False)
     assert len(categorias) == 2
     assert categorias[0].grupo == "Grupo A"
+
+
+def test_normalizar_produto_descricao_detecta_marca_e_remove_unidade():
+    nome, marca = normalizar_produto_descricao("ARROZ INTEGRAL TIO JOAO 5KG")
+    assert nome == "Arroz Integral"
+    assert marca == "Tio João"
+
+    nome_sem_marca, marca_sem = normalizar_produto_descricao("Detergente Líquido Neutro 500ml")
+    assert nome_sem_marca == "Detergente Líquido Neutro"
+    assert marca_sem is None
+
+
+def test_salvar_nota_cria_produtos_e_aliases(tmp_path):
+    db_path = tmp_path / "test.duckdb"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    with conexao(db_path) as con:
+        item_row = con.execute(
+            """
+            SELECT descricao, produto_id, produto_nome, produto_marca
+            FROM itens
+            LIMIT 1
+            """
+        ).fetchone()
+        assert item_row is not None
+        descricao, produto_id, produto_nome, produto_marca = item_row
+        assert produto_id is not None
+        normalizado_nome, normalizado_marca = normalizar_produto_descricao(descricao)
+        assert produto_nome == normalizado_nome
+        assert produto_marca == normalizado_marca
+
+        produtos_total_row = con.execute("SELECT COUNT(*) FROM produtos").fetchone()
+        aliases_total_row = con.execute("SELECT COUNT(*) FROM aliases_produtos").fetchone()
+
+    assert produtos_total_row is not None
+    assert aliases_total_row is not None
+    assert produtos_total_row[0] >= 1
+    assert aliases_total_row[0] >= 1
 def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     db_path = tmp_path / "test.duckdb"
     nota = _nota_exemplo()

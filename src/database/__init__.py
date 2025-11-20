@@ -180,6 +180,88 @@ class ProdutoPadronizado:
 	atualizado_em: Optional[str] = None
 
 
+_MARCAS_CONHECIDAS: dict[str, str] = {
+	"TIO JOAO": "Tio João",
+	"TIO JOÃO": "Tio João",
+	"SADIA": "Sadia",
+	"NESTLE": "Nestlé",
+	"NESTLÉ": "Nestlé",
+	"AMBEV": "Ambev",
+	"COCA COLA": "Coca-Cola",
+	"COCA-COLA": "Coca-Cola",
+	"OMO": "Omo",
+	"COLGATE": "Colgate",
+	"DOVE": "Dove",
+	"BRAHMA": "Brahma",
+	"SKOL": "Skol",
+	"HEINEKEN": "Heineken",
+	"ITAMBE": "Itambé",
+	"ITAMBÉ": "Itambé",
+	"YOKI": "Yoki",
+	"QUALY": "Qualy",
+	"NINHO": "Ninho",
+}
+
+_STOPWORDS_DESCRICAO = {
+	"DE",
+	"DA",
+	"DO",
+	"DOS",
+	"DAS",
+	"COM",
+	"SEM",
+	"EM",
+	"E",
+}
+
+_UNIDADES_REGEX = re.compile(
+	r"\b\d+[.,]?\d*\s*(kg|g|mg|l|ml|un|und|cx|pct|pct\.|pack|lt|sache|sachê|cartela|garrafa|lata|pt|pacote)\b",
+	re.IGNORECASE,
+)
+
+_PONTOS_REGEX = re.compile(r"[.,;:/\\-]+")
+
+
+def normalizar_produto_descricao(descricao: str | None) -> tuple[str, Optional[str]]:
+	"""Remove quantidades/unidades e detecta marcas conhecidas.
+
+	Retorna uma tupla (nome_base, marca_base). Caso não seja possível normalizar,
+	`nome_base` será string vazia e `marca_base` None.
+	"""
+
+	if not descricao:
+		return "", None
+
+	texto = _limpar_texto_curto(descricao)
+	if not texto:
+		return "", None
+
+	texto_sem_pontos = _PONTOS_REGEX.sub(" ", texto)
+	texto_sem_unidades = _UNIDADES_REGEX.sub(" ", texto_sem_pontos)
+	texto_sem_unidades = re.sub(r"\s+", " ", texto_sem_unidades).strip()
+
+	marca = None
+	texto_para_procura = texto_sem_unidades.upper()
+	for marcador, marca_normalizada in _MARCAS_CONHECIDAS.items():
+		if marcador in texto_para_procura:
+			marca = marca_normalizada
+			texto_sem_unidades = re.sub(marcador, " ", texto_sem_unidades, flags=re.IGNORECASE)
+			texto_para_procura = texto_sem_unidades.upper()
+			break
+
+	tokens = [
+		token
+		for token in texto_sem_unidades.split()
+		if token.upper() not in _STOPWORDS_DESCRICAO and not token.isdigit()
+	]
+
+	nome_base = " ".join(tokens).strip()
+	if not nome_base:
+		nome_base = texto_sem_unidades.strip()
+
+	return nome_base.title(), marca
+
+
 def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 	caminho = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 	caminho.parent.mkdir(parents=True, exist_ok=True)
@@ -557,6 +639,91 @@ def registrar_classificacao_itens(
 	return len(registros)
 
 
+def _buscar_produto_por_nome_marca(
+	con: duckdb.DuckDBPyConnection, nome_base: str, marca_base: Optional[str]
+) -> Optional[ProdutoPadronizado]:
+	row = con.execute(
+		"""
+		SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+		FROM produtos
+		WHERE lower(nome_base) = lower(?)
+			AND lower(COALESCE(marca_base, '')) = lower(COALESCE(?, ''))
+		""",
+		[nome_base, marca_base or ""],
+	).fetchone()
+	if row is None:
+		return None
+	return ProdutoPadronizado(
+		id=row[0],
+		nome_base=row[1],
+		marca_base=row[2],
+		categoria_id=row[3],
+		criado_em=row[4],
+		atualizado_em=row[5],
+	)
+
+
+def _criar_produto(
+	con: duckdb.DuckDBPyConnection, nome_base: str, marca_base: Optional[str]
+) -> ProdutoPadronizado:
+	row = con.execute(
+		"""
+		INSERT INTO produtos (nome_base, marca_base)
+		VALUES (?, ?)
+		RETURNING id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+		""",
+		[nome_base, marca_base],
+	).fetchone()
+	if row is None:
+		raise RuntimeError("Falha ao criar produto padronizado")
+	return ProdutoPadronizado(
+		id=row[0],
+		nome_base=row[1],
+		marca_base=row[2],
+		categoria_id=row[3],
+		criado_em=row[4],
+		atualizado_em=row[5],
+	)
+
+
+def _registrar_alias_produto(
+	con: duckdb.DuckDBPyConnection, produto_id: int, descricao_original: str
+) -> None:
+	texto = _limpar_texto_curto(descricao_original)
+	if not texto:
+		return
+	existe = con.execute(
+		"""
+		SELECT 1 FROM aliases_produtos
+		WHERE produto_id = ? AND lower(texto_original) = lower(?)
+		""",
+		[produto_id, texto],
+	).fetchone()
+	if existe:
+		return
+	con.execute(
+		"""
+		INSERT INTO aliases_produtos (produto_id, texto_original)
+		VALUES (?, ?)
+		""",
+		[produto_id, texto],
+	)
+
+
+def _resolver_produto_por_descricao(
+	con: duckdb.DuckDBPyConnection, descricao: str
+) -> Optional[ProdutoPadronizado]:
+	nome_base, marca_base = normalizar_produto_descricao(descricao)
+	if not nome_base:
+		return None
+	produto = _buscar_produto_por_nome_marca(con, nome_base, marca_base)
+	if produto is None:
+		produto = _criar_produto(con, nome_base, marca_base)
+	if produto.id is not None:
+		_registrar_alias_produto(con, produto.id, descricao)
+	return produto
+
+
 def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 	con.execute("DELETE FROM pagamentos WHERE chave_acesso = ?", [nota.chave_acesso])
 	con.execute("DELETE FROM itens WHERE chave_acesso = ?", [nota.chave_acesso])
@@ -611,6 +778,10 @@ def _persistir_itens(
 	con: duckdb.DuckDBPyConnection, chave: str, itens: Iterable[NotaItem]
 ) -> None:
 	for sequencia, item in enumerate(itens, start=1):
+		produto = _resolver_produto_por_descricao(con, item.descricao)
+		produto_id = produto.id if produto else None
+		produto_nome = produto.nome_base if produto else None
+		produto_marca = produto.marca_base if produto else None
 		con.execute(
 			"""
 			INSERT INTO itens (
@@ -622,12 +793,15 @@ def _persistir_itens(
 				unidade,
 				valor_unitario,
 				valor_total,
+				produto_id,
+				produto_nome,
+				produto_marca,
 				categoria_sugerida,
 				categoria_confirmada,
 				fonte_classificacao,
 				confianca_classificacao,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
 			""",
 			[
 				chave,
@@ -638,6 +812,9 @@ def _persistir_itens(
 				item.unidade,
 				_decimal_para_str(item.valor_unitario),
 				_decimal_para_str(item.valor_total),
+				produto_id,
+				produto_nome,
+				produto_marca,
 			],
 		)
 
