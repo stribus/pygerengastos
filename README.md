@@ -6,6 +6,7 @@ Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e)
 
 - ✅ Scraper da SEFAZ-RS refeito para usar POST no endpoint oficial (`SAT-WEB-NFE-NFC_2.asp`), com cabeçalhos adequados e salvamento automático do HTML.
 - ✅ Fixture pública (`.github/xmlexemplo.xml`) garante previsibilidade dos testes.
+- ✅ Persistência inicial em DuckDB com tabelas para notas, itens e pagamentos, além de utilitários para salvar e consultar.
 - 🚧 Próximos focos: classificação via Groq, persistência em DuckDB e dashboards Streamlit.
 
 ## interfaces
@@ -46,11 +47,18 @@ O módulo `src.scrapers.receita_rs` envia um POST para `https://www.sefaz.rs.gov
     print(f"Total: {nota.valor_total}")
     print(f"Itens extraídos: {len(nota.itens)}")
 
+Após a extração, a camada `src.database` disponibiliza `salvar_nota()` para persistir a nota no DuckDB (`data/gastos.duckdb`) e `listar_notas()`/`carregar_nota()` para alimentar o Streamlit:
+
+    from src.database import salvar_nota, listar_notas
+
+    salvar_nota(nota)
+    print(listar_notas(limit=5))
+
 ## Testes
 
-Execute os testes que validam o parser com o HTML de exemplo (lembrando de estar com a venv ativa):
+Execute a suíte completa (scraper + DuckDB) para garantir que tudo esteja consistente:
 
-    python -m pytest tests/test_receita_rs.py
+    python -m pytest
 
 ## Próximos passos
 
