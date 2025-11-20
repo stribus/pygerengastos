@@ -6,9 +6,11 @@ from src.database import (
     carregar_nota,
     conexao,
     inicializar_banco,
+    listar_categorias,
     listar_itens_para_classificacao,
     listar_notas,
     registrar_classificacao_itens,
+    seed_categorias_csv,
     salvar_nota,
 )
 from src.scrapers import receita_rs
@@ -82,6 +84,22 @@ def test_listar_itens_para_classificacao_retorna_itens(tmp_path):
 	primeiro = itens[0]
 	assert primeiro.descricao == nota.itens[0].descricao
 	assert primeiro.categoria_sugerida is None
+
+
+def test_seed_categorias_csv_insere_sem_duplicar(tmp_path):
+    db_path = tmp_path / "test.duckdb"
+    csv_path = tmp_path / "categorias.csv"
+    csv_path.write_text("Grupo,Categoria\nGrupo A,Cat 1\nGrupo A,Cat 2\n", encoding="utf-8")
+
+    inseridos = seed_categorias_csv(csv_path, db_path=db_path)
+    assert inseridos == 2
+    # rodar novamente não deve duplicar
+    inseridos_segunda = seed_categorias_csv(csv_path, db_path=db_path)
+    assert inseridos_segunda == 0
+
+    categorias = listar_categorias(db_path=db_path, apenas_ativos=False)
+    assert len(categorias) == 2
+    assert categorias[0].grupo == "Grupo A"
 def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     db_path = tmp_path / "test.duckdb"
     nota = _nota_exemplo()

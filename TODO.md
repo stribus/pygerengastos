@@ -19,10 +19,12 @@
    - [x] Cobrir parsing com testes automatizados e fixture pública.
 - [ ] **Classificação de itens**
    - [x] Detectar itens inéditos e solicitar classificação à API da Groq com cache local (`classificar_itens_pendentes`).
+   - [ ] Identificar produto (nome base + marca) junto com a categoria para permitir agrupamentos.
    - [ ] Expor mecanismo de revisão manual para ajustes.
 - [ ] **Armazenamento e análise**
-   - [ ] Persistir notas, itens e classificações no DuckDB.
+   - [ ] Criar tabelas de categorias/produtos/aliases e relacionar itens a um `produto_id`.
    - [ ] Padronizar schema com datas, estabelecimentos, categorias e totais por item.
+   - [ ] Popular catálogo inicial de categorias a partir do CSV fornecido e permitir edição.
 - [ ] **Visualização**
    - [ ] Construir dashboards Streamlit com listagem, filtros e status de classificação.
    - [ ] Adicionar gráficos mensais e comparativos por categoria.

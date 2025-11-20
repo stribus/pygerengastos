@@ -10,14 +10,15 @@ demais partes do projeto evoluam em paralelo."""
 
 from __future__ import annotations
 
+import csv
+import json
+import re
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
-import json
-import re
 
 import duckdb
 
@@ -25,6 +26,7 @@ from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 
 _BASE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = _BASE_DIR / "data" / "gastos.duckdb"
+DEFAULT_CATEGORIAS_CSV = _BASE_DIR / "data" / "categorias.csv"
 
 _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	"""
@@ -48,6 +50,46 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	)
 	""",
 	"""
+	CREATE SEQUENCE IF NOT EXISTS seq_categorias START 1
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS categorias (
+		id INTEGER PRIMARY KEY DEFAULT nextval('seq_categorias'),
+		grupo TEXT NOT NULL,
+		nome TEXT NOT NULL,
+		ativo BOOLEAN DEFAULT TRUE,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (grupo, nome)
+	)
+	""",
+	"""
+	CREATE SEQUENCE IF NOT EXISTS seq_produtos START 1
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS produtos (
+		id INTEGER PRIMARY KEY DEFAULT nextval('seq_produtos'),
+		nome_base TEXT NOT NULL,
+		marca_base TEXT,
+		categoria_id INTEGER REFERENCES categorias(id),
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (nome_base, marca_base)
+	)
+	""",
+	"""
+	CREATE SEQUENCE IF NOT EXISTS seq_aliases_produtos START 1
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS aliases_produtos (
+		id INTEGER PRIMARY KEY DEFAULT nextval('seq_aliases_produtos'),
+		produto_id INTEGER NOT NULL REFERENCES produtos(id),
+		texto_original TEXT NOT NULL,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (texto_original)
+	)
+	""",
+	"""
 	CREATE TABLE IF NOT EXISTS itens (
 		chave_acesso VARCHAR,
 		sequencia INTEGER,
@@ -57,6 +99,9 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		unidade VARCHAR,
 		valor_unitario DECIMAL(18, 4),
 		valor_total DECIMAL(18, 4),
+		produto_id INTEGER REFERENCES produtos(id),
+		produto_nome TEXT,
+		produto_marca TEXT,
 		categoria_sugerida TEXT,
 		categoria_confirmada TEXT,
 		fonte_classificacao TEXT,
@@ -88,6 +133,18 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	""",
 )
 
+_SCHEMA_MIGRATIONS: tuple[str, ...] = (
+	"""
+	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_id INTEGER
+	""",
+	"""
+	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_nome TEXT
+	""",
+	"""
+	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_marca TEXT
+	""",
+)
+
 
 @dataclass(slots=True)
 class ItemParaClassificacao:
@@ -105,6 +162,24 @@ class ItemParaClassificacao:
 	emissao_iso: Optional[str]
 
 
+@dataclass(slots=True)
+class Categoria:
+	id: Optional[int]
+	grupo: str
+	nome: str
+	ativo: bool = True
+
+
+@dataclass(slots=True)
+class ProdutoPadronizado:
+	id: Optional[int]
+	nome_base: str
+	marca_base: Optional[str]
+	categoria_id: Optional[int]
+	criado_em: Optional[str] = None
+	atualizado_em: Optional[str] = None
+
+
 def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 	caminho = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 	caminho.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +188,8 @@ def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 
 def _aplicar_schema(con: duckdb.DuckDBPyConnection) -> None:
 	for ddl in _SCHEMA_DEFINITIONS:
+		con.execute(ddl)
+	for ddl in _SCHEMA_MIGRATIONS:
 		con.execute(ddl)
 
 
@@ -188,6 +265,71 @@ def listar_notas(
 			}
 		)
 	return notas
+
+
+def listar_categorias(
+	*, apenas_ativos: bool = True, db_path: Path | str | None = None
+) -> list[Categoria]:
+	"""Retorna as categorias disponíveis (opcionalmente apenas as ativas)."""
+
+	query = "SELECT id, grupo, nome, COALESCE(ativo, TRUE) FROM categorias"
+	if apenas_ativos:
+		query += " WHERE COALESCE(ativo, TRUE)"
+	query += " ORDER BY grupo, nome"
+
+	with conexao(db_path) as con:
+		rows = con.execute(query).fetchall()
+
+	return [Categoria(id=row[0], grupo=row[1], nome=row[2], ativo=bool(row[3])) for row in rows]
+
+
+def seed_categorias_csv(
+	csv_path: Path | str | None = None,
+	*, db_path: Path | str | None = None,
+) -> int:
+	"""Importa categorias a partir de um CSV (Grupo,Categoria).
+
+	Linhas repetidas ou inválidas são ignoradas. Retorna o total de novas categorias inseridas.
+	"""
+
+	caminho = Path(csv_path) if csv_path is not None else DEFAULT_CATEGORIAS_CSV
+	if not caminho.exists():
+		raise FileNotFoundError(f"Arquivo de categorias não encontrado: {caminho}")
+
+	with caminho.open(encoding="utf-8") as arquivo:
+		reader = csv.DictReader(arquivo)
+		registros: list[tuple[str, str]] = []
+		for linha in reader:
+			grupo = _limpar_texto_curto(linha.get("Grupo"))
+			nome = _limpar_texto_curto(linha.get("Categoria"))
+			if not grupo or not nome:
+				continue
+			registros.append((grupo, nome))
+
+	if not registros:
+		return 0
+
+	inseridos = 0
+	with conexao(db_path) as con:
+		for grupo, nome in registros:
+			existe = con.execute(
+				"""
+				SELECT 1 FROM categorias
+				WHERE lower(grupo) = lower(?) AND lower(nome) = lower(?)
+				""",
+				[grupo, nome],
+			).fetchone()
+			if existe:
+				continue
+			con.execute(
+				"""
+				INSERT INTO categorias (grupo, nome)
+				VALUES (?, ?)
+				""",
+				[grupo, nome],
+			)
+			inseridos += 1
+	return inseridos
 
 
 def listar_itens_para_classificacao(
@@ -554,6 +696,15 @@ def _para_decimal(valor: object | None) -> Optional[Decimal]:
 	if isinstance(valor, Decimal):
 		return valor
 	return Decimal(str(valor))
+
+
+def _limpar_texto_curto(valor: object | None) -> str:
+	if valor is None:
+		return ""
+	texto = str(valor).strip()
+	if not texto:
+		return ""
+	return re.sub(r"\s+", " ", texto)
 
 
 def _normalizar_classificacao_input(item: object) -> dict[str, Any]:
