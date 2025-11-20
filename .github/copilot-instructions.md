@@ -60,9 +60,18 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 # Ativar ambiente virtual
 .\.venv\Scripts\Activate.ps1
 
-# Instalar dependências (quando disponíveis)
-uv pip install streamlit duckdb requests OpenAI
+# Instalar dependências
+uv pip install -r requirements.txt
+
+# OU instalar pacotes individuais
+uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
 ```
+
+### ⚠️ IMPORTANTE: Gerenciamento de Pacotes
+- **SEMPRE use `uv pip install`** ao invés de `pip install`
+- **SEMPRE use `uv pip`** para todas as operações de pacotes
+- O projeto usa `uv` como gerenciador de pacotes Python
+- Comando para rodar testes: `.\.venv\Scripts\Activate.ps1; pytest`
 
 ### Estrutura de Arquivos Sugerida
 ```
@@ -78,11 +87,17 @@ uv pip install streamlit duckdb requests OpenAI
 
 ### Comandos Essenciais
 ```bash
+# Rodar testes
+.\.venv\Scripts\Activate.ps1; pytest
+
 # Executar aplicação Streamlit
-streamlit run main.py
+.\.venv\Scripts\Activate.ps1; streamlit run main.py
 
 # Desenvolvimento com auto-reload
-streamlit run main.py --server.runOnSave true
+.\.venv\Scripts\Activate.ps1; streamlit run main.py --server.runOnSave true
+
+# Instalar nova dependência
+.\.venv\Scripts\Activate.ps1; uv pip install <pacote>
 ```
 
 ## Padrões de Dados
