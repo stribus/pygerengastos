@@ -18,7 +18,7 @@
    - [x] Reimplementar a busca usando POST no endpoint `SAT-WEB-NFE-NFC_2.asp`, simulando os cabeçalhos do navegador e salvando o HTML em `data/raw_nfce`.
    - [x] Cobrir parsing com testes automatizados e fixture pública.
 - [ ] **Classificação de itens**
-   - [ ] Detectar itens inéditos e solicitar classificação à API da Groq com cache local.
+   - [x] Detectar itens inéditos e solicitar classificação à API da Groq com cache local (`classificar_itens_pendentes`).
    - [ ] Expor mecanismo de revisão manual para ajustes.
 - [ ] **Armazenamento e análise**
    - [ ] Persistir notas, itens e classificações no DuckDB.
@@ -29,7 +29,7 @@
 - [ ] **Infra e testes**
    - [x] Estruturar pastas (`src/`, `data/`, `tests/`).
    - [x] Criar fixtures e testes para o scraper.
-   - [ ] Adicionar testes para classificação e consultas DuckDB.
+   - [x] Adicionar testes para classificação e consultas DuckDB.
 
 ## Observações futuras
 

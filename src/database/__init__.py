@@ -11,10 +11,12 @@ demais partes do projeto evoluam em paralelo."""
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
+import json
 import re
 
 import duckdb
@@ -71,7 +73,36 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		PRIMARY KEY (chave_acesso, forma)
 	)
 	""",
+	"""
+	CREATE TABLE IF NOT EXISTS classificacoes_historico (
+		chave_acesso VARCHAR,
+		sequencia INTEGER,
+		categoria TEXT NOT NULL,
+		confianca DOUBLE,
+		origem TEXT,
+		modelo TEXT,
+		observacoes TEXT,
+		resposta_json TEXT,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)
+	""",
 )
+
+
+@dataclass(slots=True)
+class ItemParaClassificacao:
+	chave_acesso: str
+	sequencia: int
+	descricao: str
+	codigo: Optional[str]
+	quantidade: Optional[Decimal]
+	unidade: Optional[str]
+	valor_unitario: Optional[Decimal]
+	valor_total: Optional[Decimal]
+	categoria_sugerida: Optional[str]
+	categoria_confirmada: Optional[str]
+	emitente_nome: Optional[str]
+	emissao_iso: Optional[str]
 
 
 def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
@@ -159,6 +190,62 @@ def listar_notas(
 	return notas
 
 
+def listar_itens_para_classificacao(
+	*, limit: int = 25, apenas_sem_categoria: bool = True, db_path: Path | str | None = None
+) -> list[ItemParaClassificacao]:
+	"""Retorna itens ainda não classificados para uso pela IA."""
+
+	where_clauses = ["i.categoria_confirmada IS NULL"]
+	if apenas_sem_categoria:
+		where_clauses.append("i.categoria_sugerida IS NULL")
+	where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+	with conexao(db_path) as con:
+		rows = con.execute(
+			f"""
+			SELECT
+				i.chave_acesso,
+				i.sequencia,
+				i.descricao,
+				i.codigo,
+				i.quantidade,
+				i.unidade,
+				i.valor_unitario,
+				i.valor_total,
+				i.categoria_sugerida,
+				i.categoria_confirmada,
+				n.emitente_nome,
+				n.emissao_iso
+			FROM itens i
+			JOIN notas n ON n.chave_acesso = i.chave_acesso
+			WHERE {where_sql}
+			ORDER BY COALESCE(i.atualizado_em, CURRENT_TIMESTAMP), i.chave_acesso, i.sequencia
+			LIMIT ?
+			""",
+			[limit],
+		).fetchall()
+
+	itens: list[ItemParaClassificacao] = []
+	for row in rows:
+		itens.append(
+			ItemParaClassificacao(
+				chave_acesso=row[0],
+				sequencia=row[1],
+				descricao=row[2],
+				codigo=row[3],
+				quantidade=_para_decimal(row[4]),
+				unidade=row[5],
+				valor_unitario=_para_decimal(row[6]),
+				valor_total=_para_decimal(row[7]),
+				categoria_sugerida=row[8],
+				categoria_confirmada=row[9],
+				emitente_nome=row[10],
+				emissao_iso=row[11],
+			)
+		)
+	return itens
+
+
 def carregar_nota(chave: str, *, db_path: Path | str | None = None) -> Optional[NotaFiscal]:
 	"""Reconstrói uma :class:`NotaFiscal` a partir do banco."""
 
@@ -232,6 +319,100 @@ def carregar_nota(chave: str, *, db_path: Path | str | None = None) -> Optional[
 		consumidor_nome=dados[12],
 		pagamentos=pagamentos,
 	)
+
+
+def registrar_classificacao_itens(
+	classificacoes: Iterable[object],
+	*, confirmar: bool = False,
+	 db_path: Path | str | None = None,
+) -> int:
+	"""Atualiza as categorias dos itens e registra histórico.
+
+	`classificacoes` pode ser uma sequência de dicts ou dataclasses com os campos:
+	- chave_acesso
+	- sequencia
+	- categoria
+	- confianca (opcional)
+	- origem (opcional)
+	- modelo (opcional)
+	- observacoes (opcional)
+	- resposta_json / raw_response (opcional)
+	- confirmar (opcional, sobrescreve o parâmetro da função)
+	"""
+
+	registros = [_normalizar_classificacao_input(item) for item in classificacoes]
+	if not registros:
+		return 0
+
+	with conexao(db_path) as con:
+		for registro in registros:
+			_confirmar = bool(registro.get("confirmar", confirmar))
+			params_comuns = [
+				registro["categoria"],
+				registro["origem"],
+				registro.get("confianca"),
+				registro["chave_acesso"],
+				registro["sequencia"],
+			]
+			if _confirmar:
+				con.execute(
+					"""
+					UPDATE itens
+					SET categoria_sugerida = ?,
+						categoria_confirmada = ?,
+						fonte_classificacao = ?,
+						confianca_classificacao = ?,
+						atualizado_em = CURRENT_TIMESTAMP
+					WHERE chave_acesso = ? AND sequencia = ?
+					""",
+					[
+						registro["categoria"],
+						registro["categoria"],
+						registro["origem"],
+						registro.get("confianca"),
+						registro["chave_acesso"],
+						registro["sequencia"],
+					],
+				)
+			else:
+				con.execute(
+					"""
+					UPDATE itens
+					SET categoria_sugerida = ?,
+						fonte_classificacao = ?,
+						confianca_classificacao = ?,
+						atualizado_em = CURRENT_TIMESTAMP
+					WHERE chave_acesso = ? AND sequencia = ?
+					""",
+					params_comuns,
+				)
+
+			con.execute(
+				"""
+				INSERT INTO classificacoes_historico (
+					chave_acesso,
+					sequencia,
+					categoria,
+					confianca,
+					origem,
+					modelo,
+					observacoes,
+					resposta_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				[
+					registro["chave_acesso"],
+					registro["sequencia"],
+					registro["categoria"],
+					registro.get("confianca"),
+					registro["origem"],
+					registro.get("modelo"),
+					registro.get("observacoes"),
+					registro.get("resposta_json"),
+				],
+			)
+
+	return len(registros)
 
 
 def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
@@ -373,3 +554,56 @@ def _para_decimal(valor: object | None) -> Optional[Decimal]:
 	if isinstance(valor, Decimal):
 		return valor
 	return Decimal(str(valor))
+
+
+def _normalizar_classificacao_input(item: object) -> dict[str, Any]:
+	if isinstance(item, dict):
+		dados = dict(item)
+	elif is_dataclass(item) and not isinstance(item, type):
+		dados = asdict(item)
+	else:
+		raise TypeError("Classificação deve ser um dict ou dataclass")
+
+	for chave in ("chave_acesso", "sequencia", "categoria"):
+		if chave not in dados:
+			raise ValueError(f"Campo obrigatório ausente: {chave}")
+
+	categoria = str(dados["categoria"]).strip()
+	if not categoria:
+		raise ValueError("Categoria não pode ser vazia")
+
+	resposta_json = dados.get("resposta_json") or dados.get("raw_response")
+	if isinstance(resposta_json, (dict, list)):
+		resposta_json = json.dumps(resposta_json, ensure_ascii=False)
+	elif resposta_json is not None:
+		resposta_json = str(resposta_json)
+
+	retorno: dict[str, Any] = {
+		"chave_acesso": str(dados["chave_acesso"]),
+		"sequencia": int(dados["sequencia"]),
+		"categoria": categoria,
+		"confianca": _normalizar_float(dados.get("confianca")),
+		"origem": str(dados.get("origem") or "groq").lower(),
+		"modelo": dados.get("modelo"),
+		"observacoes": dados.get("observacoes"),
+		"resposta_json": resposta_json,
+		"confirmar": dados.get("confirmar"),
+	}
+	return retorno
+
+
+def _normalizar_float(valor: object | None) -> Optional[float]:
+	if valor is None:
+		return None
+	if isinstance(valor, (int, float)):
+		return float(valor)
+	if isinstance(valor, Decimal):
+		return float(valor)
+	texto = str(valor).strip()
+	if not texto:
+		return None
+	texto = texto.replace(",", ".")
+	try:
+		return float(texto)
+	except ValueError:
+		return None

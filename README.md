@@ -54,6 +54,18 @@ Após a extração, a camada `src.database` disponibiliza `salvar_nota()` para p
     salvar_nota(nota)
     print(listar_notas(limit=5))
 
+## Classificação com Groq
+
+Configure a variável `GROQ_API_KEY` no arquivo `.env` (ou diretamente no ambiente) para habilitar a integração. O módulo `src.classifiers.groq` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no DuckDB, chama a Groq e grava o histórico:
+
+    from src.classifiers import classificar_itens_pendentes
+
+    resultados = classificar_itens_pendentes(limit=5, confirmar=False)
+    for resultado in resultados:
+        print(resultado.sequencia, resultado.categoria, resultado.confianca)
+
+Toda classificação fica salva nas colunas `categoria_sugerida`, `fonte_classificacao`, `confianca_classificacao` da tabela `itens` e o histórico completo (com modelo, origem e resposta) vai para `classificacoes_historico`.
+
 ## Testes
 
 Execute a suíte completa (scraper + DuckDB) para garantir que tudo esteja consistente:
