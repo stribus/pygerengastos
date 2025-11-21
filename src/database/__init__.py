@@ -180,6 +180,29 @@ class ProdutoPadronizado:
 	atualizado_em: Optional[str] = None
 
 
+@dataclass(slots=True)
+class NotaParaRevisao:
+	chave_acesso: str
+	emitente_nome: str | None
+	emissao_iso: str | None
+	valor_total: Decimal | None
+	total_itens: int
+	itens_pendentes: int
+
+
+@dataclass(slots=True)
+class ItemNotaRevisao:
+	chave_acesso: str
+	sequencia: int
+	descricao: str
+	quantidade: Decimal | None
+	valor_total: Decimal | None
+	categoria_sugerida: str | None
+	categoria_confirmada: str | None
+	produto_nome: str | None
+	produto_marca: str | None
+
+
 _MARCAS_CONHECIDAS: dict[str, str] = {
 	"TIO JOAO": "Tio João",
 	"TIO JOÃO": "Tio João",
@@ -352,6 +375,58 @@ def listar_notas(
 	return notas
 
 
+def listar_notas_para_revisao(
+	limit: int = 50,
+	*,
+	somente_pendentes: bool = False,
+	db_path: Path | str | None = None,
+) -> list[NotaParaRevisao]:
+	"""Retorna notas com agregados para uso da interface de revisão manual."""
+
+	db_file = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+	if not db_file.exists():
+		return []
+
+	where_clause = "WHERE COALESCE(a.pendentes, 0) > 0" if somente_pendentes else ""
+	query = f"""
+		WITH itens_agg AS (
+			SELECT
+				chave_acesso,
+				COUNT(*) AS total_itens,
+				SUM(CASE WHEN categoria_confirmada IS NULL THEN 1 ELSE 0 END) AS pendentes
+			FROM itens
+			GROUP BY chave_acesso
+		)
+		SELECT
+			n.chave_acesso,
+			n.emitente_nome,
+			n.emissao_iso,
+			n.valor_total,
+			COALESCE(a.total_itens, 0) AS total_itens,
+			COALESCE(a.pendentes, 0) AS pendentes
+		FROM notas n
+		LEFT JOIN itens_agg a ON a.chave_acesso = n.chave_acesso
+		{where_clause}
+		ORDER BY n.emissao_iso DESC NULLS LAST, n.chave_acesso DESC
+		LIMIT ?
+	"""
+
+	with duckdb.connect(str(db_file)) as con:
+		rows = con.execute(query, [limit]).fetchall()
+
+	return [
+		NotaParaRevisao(
+			chave_acesso=row[0],
+			emitente_nome=row[1],
+			emissao_iso=row[2],
+			valor_total=_para_decimal(row[3]),
+			total_itens=int(row[4] or 0),
+			itens_pendentes=int(row[5] or 0),
+		)
+		for row in rows
+	]
+
+
 def listar_categorias(
 	*, apenas_ativos: bool = True, db_path: Path | str | None = None
 ) -> list[Categoria]:
@@ -471,6 +546,95 @@ def listar_itens_para_classificacao(
 			)
 		)
 	return itens
+
+
+def listar_itens_para_revisao(
+	chave_acesso: str,
+	*,
+	somente_pendentes: bool = False,
+	db_path: Path | str | None = None,
+) -> list[ItemNotaRevisao]:
+	"""Retorna itens de uma nota para uso na revisão manual."""
+
+	if not chave_acesso:
+		return []
+
+	db_file = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+	if not db_file.exists():
+		return []
+
+	where_extra = "AND categoria_confirmada IS NULL" if somente_pendentes else ""
+	query = f"""
+		SELECT
+			chave_acesso,
+			sequencia,
+			descricao,
+			quantidade,
+			valor_total,
+			categoria_sugerida,
+			categoria_confirmada,
+			produto_nome,
+			produto_marca
+		FROM itens
+		WHERE chave_acesso = ?
+		{where_extra}
+		ORDER BY sequencia
+	"""
+
+	with duckdb.connect(str(db_file)) as con:
+		rows = con.execute(query, [chave_acesso]).fetchall()
+
+	return [
+		ItemNotaRevisao(
+			chave_acesso=row[0],
+			sequencia=int(row[1]),
+			descricao=row[2],
+			quantidade=_para_decimal(row[3]),
+			valor_total=_para_decimal(row[4]),
+			categoria_sugerida=row[5],
+			categoria_confirmada=row[6],
+			produto_nome=row[7],
+			produto_marca=row[8],
+		)
+		for row in rows
+	]
+
+
+def registrar_revisoes_manuais(
+	itens: Sequence[Mapping[str, Any]],
+	*,
+	confirmar: bool,
+	usuario: str | None = None,
+	observacoes_padrao: str | None = None,
+	db_path: Path | str | None = None,
+) -> None:
+	"""Consolida ajustes manuais reaproveitando registrar_classificacao_itens."""
+
+	if not itens:
+		return
+
+	registro_timestamp = datetime.utcnow().isoformat(timespec="seconds")
+	observacao_base = observacoes_padrao or f"Revisão manual em {registro_timestamp}"
+	if usuario:
+		observacao_base = f"{observacao_base} por {usuario}"
+
+	payload: list[dict[str, Any]] = []
+	for item in itens:
+		payload.append(
+			{
+				"chave_acesso": item["chave_acesso"],
+				"sequencia": int(item["sequencia"]),
+				"categoria": (item.get("categoria") or "").strip() or None,
+				"confianca": item.get("confianca"),
+				"origem": "revisao-manual",
+				"modelo": "streamlit-manual",
+				"observacoes": item.get("observacoes") or observacao_base,
+				"produto_nome": (item.get("produto_nome") or "").strip() or None,
+				"produto_marca": (item.get("produto_marca") or "").strip() or None,
+			}
+		)
+
+	registrar_classificacao_itens(payload, confirmar=confirmar, db_path=db_path)
 
 
 def carregar_nota(chave: str, *, db_path: Path | str | None = None) -> Optional[NotaFiscal]:
