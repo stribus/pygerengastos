@@ -1243,3 +1243,18 @@ def _normalizar_float(valor: object | None) -> Optional[float]:
 		return float(texto)
 	except ValueError:
 		return None
+
+
+def obter_categoria_de_produto(produto_id: int, *, db_path: Path | str | None = None) -> str | None:
+	"""Retorna o nome da categoria associada a um produto."""
+	with conexao(db_path) as con:
+		row = con.execute(
+			"""
+			SELECT c.nome
+			FROM produtos p
+			JOIN categorias c ON c.id = p.categoria_id
+			WHERE p.id = ?
+			""",
+			[produto_id],
+		).fetchone()
+		return row[0] if row else None

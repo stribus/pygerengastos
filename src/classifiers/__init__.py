@@ -9,9 +9,11 @@ from src.database import (
 	listar_categorias,
 	listar_itens_para_classificacao,
 	registrar_classificacao_itens,
+	obter_categoria_de_produto,
 )
 
 from .groq import ClassificacaoResultado, GroqClassifier
+from .embeddings import buscar_produtos_semelhantes
 
 __all__ = [
 	"ClassificacaoResultado",
@@ -35,22 +37,58 @@ def classificar_itens_pendentes(
 	if not itens:
 		return []
 
-	categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
+	resultados_finais: list[ClassificacaoResultado] = []
+	itens_para_groq: list[ItemParaClassificacao] = []
 
-	if classifier is None:
-		# Garantir que o prompt sempre receba as categorias conhecidas
-		if model is not None and temperature is not None:
-			classifier = GroqClassifier(model=model, temperature=temperature, categorias=categorias)
-		elif model is not None:
-			classifier = GroqClassifier(model=model, categorias=categorias)
-		elif temperature is not None:
-			classifier = GroqClassifier(temperature=temperature, categorias=categorias)
-		else:
-			classifier = GroqClassifier(categorias=categorias)
+	# 1. Tentar classificação semântica via Chroma
+	for item in itens:
+		matches = buscar_produtos_semelhantes(item.descricao, top_k=1)
+		match = matches[0] if matches else None
 
-	resultados = classifier.classificar_itens(itens)
-	_salvar_resultados(resultados, confirmar=confirmar, db_path=db_path)
-	return resultados
+		# Se encontrou algo com alta confiança (> 0.82)
+		if match and (match.get("score") or 0.0) >= 0.82:
+			produto_id = match.get("produto_id")
+			if produto_id:
+				categoria = obter_categoria_de_produto(int(produto_id), db_path=db_path)
+				if categoria:
+					resultados_finais.append(
+						ClassificacaoResultado(
+							chave_acesso=item.chave_acesso,
+							sequencia=item.sequencia,
+							categoria=categoria,
+							confianca=match.get("score"),
+							origem="chroma-cache",
+							modelo="all-MiniLM-L6-v2",
+							observacoes=f"Match semântico com produto {produto_id}",
+							produto_nome=match.get("nome_base"),
+							produto_marca=match.get("marca_base"),
+						)
+					)
+					continue
+
+		# Se não encontrou ou confiança baixa, vai para Groq
+		itens_para_groq.append(item)
+
+	# 2. Processar itens restantes com Groq
+	if itens_para_groq:
+		categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
+
+		if classifier is None:
+			# Garantir que o prompt sempre receba as categorias conhecidas
+			if model is not None and temperature is not None:
+				classifier = GroqClassifier(model=model, temperature=temperature, categorias=categorias)
+			elif model is not None:
+				classifier = GroqClassifier(model=model, categorias=categorias)
+			elif temperature is not None:
+				classifier = GroqClassifier(temperature=temperature, categorias=categorias)
+			else:
+				classifier = GroqClassifier(categorias=categorias)
+
+		resultados_groq = classifier.classificar_itens(itens_para_groq)
+		resultados_finais.extend(resultados_groq)
+
+	_salvar_resultados(resultados_finais, confirmar=confirmar, db_path=db_path)
+	return resultados_finais
 
 
 def _salvar_resultados(

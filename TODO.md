@@ -9,7 +9,7 @@
 
 - ✅ Scraper da SEFAZ-RS usa POST no endpoint `SAT-WEB-NFE-NFC_2.asp`, simula cabeçalhos do navegador e salva o HTML bruto para depuração.
 - ✅ Testes automatizados (`tests/test_receita_rs.py`) cobrindo totais, pagamentos e itens a partir do HTML de exemplo.
-- 🚧 Próximo foco imediato: classificação inteligente de itens e persistência em DuckDB.
+- 🚧 Próximo foco imediato: Popular categorias iniciais com seed_categorias_csv.
 
 ## Etapas prioritárias
 
@@ -19,6 +19,7 @@
   - [x] Cobrir parsing com testes automatizados e fixture pública.
 - [ ] **Classificação de itens**
   - [x] Detectar itens inéditos e solicitar classificação à API da Groq com cache local (`classificar_itens_pendentes`).
+  - [x] Integrar busca semântica (Chroma) para evitar chamadas desnecessárias à Groq.
   - [x] Documentar o fluxo semântico Chroma + Groq no README.md.
   - [x] Identificar produto (nome base + marca) junto com a categoria para permitir agrupamentos.
   - [ ] Expor mecanismo de revisão manual para ajustes (UI/backend ainda inexistentes — apenas flag `confirmar` via backend).
