@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Sequence
 
-from src.database import ItemParaClassificacao, listar_itens_para_classificacao, registrar_classificacao_itens
+from src.database import (
+	ItemParaClassificacao,
+	listar_categorias,
+	listar_itens_para_classificacao,
+	registrar_classificacao_itens,
+)
 
 from .groq import ClassificacaoResultado, GroqClassifier
 
@@ -30,15 +35,18 @@ def classificar_itens_pendentes(
 	if not itens:
 		return []
 
+	categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
+
 	if classifier is None:
-		if model and temperature is not None:
-			classifier = GroqClassifier(model=model, temperature=temperature)
-		elif model:
-			classifier = GroqClassifier(model=model)
+		# Garantir que o prompt sempre receba as categorias conhecidas
+		if model is not None and temperature is not None:
+			classifier = GroqClassifier(model=model, temperature=temperature, categorias=categorias)
+		elif model is not None:
+			classifier = GroqClassifier(model=model, categorias=categorias)
 		elif temperature is not None:
-			classifier = GroqClassifier(temperature=temperature)
+			classifier = GroqClassifier(temperature=temperature, categorias=categorias)
 		else:
-			classifier = GroqClassifier()
+			classifier = GroqClassifier(categorias=categorias)
 
 	resultados = classifier.classificar_itens(itens)
 	_salvar_resultados(resultados, confirmar=confirmar, db_path=db_path)
@@ -61,6 +69,8 @@ def _salvar_resultados(
 			"modelo": resultado.modelo,
 			"observacoes": resultado.observacoes,
 			"resposta_json": resultado.resposta_json,
+			"produto_nome": resultado.produto_nome,
+			"produto_marca": resultado.produto_marca,
 		}
 		for resultado in resultados
 	]

@@ -157,6 +157,8 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
                 "observacoes": "classificação automática",
                 "resposta_json": "{}",
                 "confirmar": True,
+                "produto_nome": "Arroz Integral",
+                "produto_marca": "Tio João",
             }
         ],
         db_path=db_path,
@@ -165,7 +167,8 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     with conexao(db_path) as con:
         item_row = con.execute(
             """
-            SELECT categoria_sugerida, categoria_confirmada, fonte_classificacao, confianca_classificacao
+            SELECT categoria_sugerida, categoria_confirmada, fonte_classificacao, confianca_classificacao,
+                produto_id, produto_nome, produto_marca
             FROM itens
             WHERE chave_acesso = ? AND sequencia = 1
             """,
@@ -184,4 +187,7 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     assert item_row[1] == "alimentacao"
     assert item_row[2] == "groq"
     assert pytest.approx(float(item_row[3]), rel=1e-3) == 0.93
+    assert item_row[4] is not None
+    assert item_row[5] == "Arroz Integral"
+    assert item_row[6] == "Tio João"
     assert registros_historico == 1

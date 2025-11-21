@@ -222,6 +222,9 @@ _UNIDADES_REGEX = re.compile(
 _PONTOS_REGEX = re.compile(r"[.,;:/\\-]+")
 
 
+_SIMILARIDADE_MINIMA = 0.82
+
+
 def normalizar_produto_descricao(descricao: str | None) -> tuple[str, Optional[str]]:
 	"""Remove quantidades/unidades e detecta marcas conhecidas.
 
@@ -611,6 +614,43 @@ def registrar_classificacao_itens(
 					params_comuns,
 				)
 
+			produto_nome = registro.get("produto_nome")
+			produto_marca = registro.get("produto_marca")
+			produto_id = None
+			if produto_nome:
+				produto = _buscar_ou_criar_produto_por_nome_marca(
+					con, produto_nome, produto_marca
+				)
+				descricao_item = _obter_descricao_item(
+					con, registro["chave_acesso"], registro["sequencia"]
+				)
+				if produto.id is not None:
+					produto_id = produto.id
+					if descricao_item:
+						_registrar_alias_produto(con, produto_id, descricao_item)
+						_registrar_embeddings_para_produto(
+							produto_id,
+							descricao_item,
+							produto.nome_base,
+							produto.marca_base,
+						)
+					con.execute(
+						"""
+						UPDATE itens
+						SET produto_id = ?,
+							produto_nome = ?,
+							produto_marca = ?
+						WHERE chave_acesso = ? AND sequencia = ?
+						""",
+						[
+							produto_id,
+							produto.nome_base,
+							produto.marca_base,
+							registro["chave_acesso"],
+							registro["sequencia"],
+						],
+					)
+
 			con.execute(
 				"""
 				INSERT INTO classificacoes_historico (
@@ -663,6 +703,48 @@ def _buscar_produto_por_nome_marca(
 	)
 
 
+def _buscar_produto_por_id(
+	con: duckdb.DuckDBPyConnection, produto_id: int
+) -> Optional[ProdutoPadronizado]:
+	row = con.execute(
+		"""
+		SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+		FROM produtos
+		WHERE id = ?
+		""",
+		[produto_id],
+	).fetchone()
+	if row is None:
+		return None
+	return ProdutoPadronizado(
+		id=row[0],
+		nome_base=row[1],
+		marca_base=row[2],
+		categoria_id=row[3],
+		criado_em=row[4],
+		atualizado_em=row[5],
+	)
+
+
+def _buscar_produto_por_descricao_similaridade(
+	con: duckdb.DuckDBPyConnection, descricao: str
+) -> Optional[ProdutoPadronizado]:
+	from src.classifiers.embeddings import buscar_produtos_semelhantes
+
+	resultados = buscar_produtos_semelhantes(descricao, top_k=5)
+	for similar in resultados:
+		score = similar.get("score") or 0.0
+		if score < _SIMILARIDADE_MINIMA:
+			continue
+		produto_id = similar.get("produto_id")
+		if not produto_id:
+			continue
+		produto = _buscar_produto_por_id(con, int(produto_id))
+		if produto:
+			return produto
+	return None
+
+
 def _criar_produto(
 	con: duckdb.DuckDBPyConnection, nome_base: str, marca_base: Optional[str]
 ) -> ProdutoPadronizado:
@@ -686,6 +768,15 @@ def _criar_produto(
 	)
 
 
+def _buscar_ou_criar_produto_por_nome_marca(
+	con: duckdb.DuckDBPyConnection, nome_base: str, marca_base: Optional[str]
+) -> ProdutoPadronizado:
+	produto = _buscar_produto_por_nome_marca(con, nome_base, marca_base)
+	if produto is None:
+		produto = _criar_produto(con, nome_base, marca_base)
+	return produto
+
+
 def _registrar_alias_produto(
 	con: duckdb.DuckDBPyConnection, produto_id: int, descricao_original: str
 ) -> None:
@@ -701,13 +792,47 @@ def _registrar_alias_produto(
 	).fetchone()
 	if existe:
 		return
-	con.execute(
+	try:
+		con.execute(
+			"""
+			INSERT INTO aliases_produtos (produto_id, texto_original)
+			VALUES (?, ?)
+			""",
+			[produto_id, texto],
+		)
+	except duckdb.Error as exc:  # pragma: no cover - tratamento de alias duplicado
+		mensagem = str(exc).lower()
+		if "unique constraint" in mensagem or "violates unique" in mensagem:
+			return
+		raise
+
+
+def _obter_descricao_item(
+	con: duckdb.DuckDBPyConnection, chave_acesso: str, sequencia: int
+) -> Optional[str]:
+	row = con.execute(
 		"""
-		INSERT INTO aliases_produtos (produto_id, texto_original)
-		VALUES (?, ?)
+		SELECT descricao FROM itens
+		WHERE chave_acesso = ? AND sequencia = ?
 		""",
-		[produto_id, texto],
-	)
+		[chave_acesso, sequencia],
+	).fetchone()
+	if not row:
+		return None
+	descricao = row[0]
+	if descricao is None:
+		return None
+	return str(descricao)
+
+
+def _registrar_embeddings_para_produto(
+	produto_id: int, descricao: str, nome_base: str, marca_base: Optional[str]
+) -> None:
+	from src.classifiers.embeddings import upsert_produto_embedding
+
+	if not descricao or not nome_base:
+		return
+	upsert_produto_embedding(produto_id, descricao, nome_base, marca_base)
 
 
 def _resolver_produto_por_descricao(
@@ -718,9 +843,12 @@ def _resolver_produto_por_descricao(
 		return None
 	produto = _buscar_produto_por_nome_marca(con, nome_base, marca_base)
 	if produto is None:
+		produto = _buscar_produto_por_descricao_similaridade(con, descricao)
+	if produto is None:
 		produto = _criar_produto(con, nome_base, marca_base)
 	if produto.id is not None:
 		_registrar_alias_produto(con, produto.id, descricao)
+		_registrar_embeddings_para_produto(produto.id, descricao, produto.nome_base, produto.marca_base)
 	return produto
 
 
@@ -906,6 +1034,20 @@ def _normalizar_classificacao_input(item: object) -> dict[str, Any]:
 	elif resposta_json is not None:
 		resposta_json = str(resposta_json)
 
+	produto_info = dados.get("produto")
+	if isinstance(produto_info, dict):
+		produto_nome = produto_info.get("nome_base") or produto_info.get("nome")
+		produto_marca = produto_info.get("marca_base") or produto_info.get("marca")
+	else:
+		produto_nome = dados.get("produto_nome")
+		produto_marca = dados.get("produto_marca")
+
+	def _fazer_texto(valor: object | None) -> str | None:
+		if valor is None:
+			return None
+		texto = str(valor).strip()
+		return texto or None
+
 	retorno: dict[str, Any] = {
 		"chave_acesso": str(dados["chave_acesso"]),
 		"sequencia": int(dados["sequencia"]),
@@ -916,6 +1058,8 @@ def _normalizar_classificacao_input(item: object) -> dict[str, Any]:
 		"observacoes": dados.get("observacoes"),
 		"resposta_json": resposta_json,
 		"confirmar": dados.get("confirmar"),
+		"produto_nome": _fazer_texto(produto_nome),
+		"produto_marca": _fazer_texto(produto_marca),
 	}
 	return retorno
 

@@ -19,6 +19,7 @@
    - [x] Cobrir parsing com testes automatizados e fixture pública.
 - [ ] **Classificação de itens**
    - [x] Detectar itens inéditos e solicitar classificação à API da Groq com cache local (`classificar_itens_pendentes`).
+   - [x] Documentar o fluxo semântico Chroma + Groq no README.md.
    - [ ] Identificar produto (nome base + marca) junto com a categoria para permitir agrupamentos.
    - [ ] Expor mecanismo de revisão manual para ajustes.
 - [ ] **Armazenamento e análise**
@@ -32,6 +33,7 @@
    - [x] Estruturar pastas (`src/`, `data/`, `tests/`).
    - [x] Criar fixtures e testes para o scraper.
    - [x] Adicionar testes para classificação e consultas DuckDB.
+   - [x] Cobrir busca semântica de embeddings com mock do Chroma.
 
 ## Observações futuras
 

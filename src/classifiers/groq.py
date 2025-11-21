@@ -24,6 +24,8 @@ class _RespostaGroq:
 	categoria: str
 	confianca: float | None = None
 	justificativa: str | None = None
+	produto_nome: str | None = None
+	produto_marca: str | None = None
 
 
 LoadDotenvCallable = Callable[..., bool]
@@ -58,6 +60,8 @@ class ClassificacaoResultado:
 	modelo: str | None = None
 	observacoes: str | None = None
 	resposta_json: str | None = None
+	produto_nome: str | None = None
+	produto_marca: str | None = None
 
 
 class GroqClassifier:
@@ -72,6 +76,7 @@ class GroqClassifier:
 		max_tokens: int = 400,
 		client: httpx.Client | None = None,
 		timeout: float = 30.0,
+		categorias: Sequence[str] | None = None,
 	):
 		self._ensure_env()
 		self.api_key = api_key or os.getenv("GROQ_API_KEY")
@@ -82,6 +87,7 @@ class GroqClassifier:
 		self.max_tokens = max_tokens
 		self._client = client
 		self._timeout = timeout
+		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
 
 	def classificar_itens(
 		self, itens: Sequence[ItemParaClassificacao]
@@ -117,6 +123,8 @@ class GroqClassifier:
 					modelo=self.model,
 					observacoes=resposta.justificativa,
 					resposta_json=resposta_json,
+					produto_nome=resposta.produto_nome,
+					produto_marca=resposta.produto_marca,
 				)
 			)
 		return resultados
@@ -152,6 +160,10 @@ class GroqClassifier:
 				f"#{item.sequencia} — {item.descricao} | quantidade: {quantidade} {unidade} | valor total: R$ {valor}"
 			)
 		linhas_formatadas = "\n".join(f"- {linha}" for linha in linhas)
+		categorias_texto = ""
+		if self.categorias_disponiveis:
+			categorias_unicas = ", ".join(sorted(set(self.categorias_disponiveis)))
+			categorias_texto = f"Categorias esperadas: {categorias_unicas}.\n\n"
 
 		prompt = textwrap.dedent(
 			f"""
@@ -160,8 +172,23 @@ class GroqClassifier:
 				serviços ou "outros". Observe o estabelecimento {contexto_estabelecimento}
 				e a data {contexto_data}.
 
+				{categorias_texto}
 				Responda SOMENTE com JSON seguindo o formato:
-				{{"itens": [{{"sequencia": 1, "categoria": "alimentacao", "confianca": 0.84, "justificativa": "texto curto"}}]}}
+				{{
+					"itens": [
+						{{
+							"sequencia": 1,
+							"categoria": "alimentacao",
+							"confianca": 0.84,
+							"produto": {{"nome_base": "Arroz branco 5kg", "marca_base": "Tio João"}},
+							"justificativa": "explicação curta"
+						}}
+					]
+				}}
+
+				Inclua em cada item o objeto "produto" com o nome_base padronizado e, quando possível,
+				uma marca_base. Use apenas palavras sem acentos para as categorias, seguindo os valores
+				providenciados.
 
 				Itens:
 				{linhas_formatadas}
@@ -212,10 +239,20 @@ class GroqClassifier:
 				sequencia_int = int(sequencia_str)
 			except (TypeError, ValueError):
 				continue
+			produto_info = entrada.get("produto") or entrada.get("produto_padronizado")
+			if isinstance(produto_info, dict):
+				produto_nome = produto_info.get("nome_base") or produto_info.get("nome")
+				produto_marca = produto_info.get("marca_base") or produto_info.get("marca")
+			else:
+				produto_nome = entrada.get("produto_nome")
+				produto_marca = entrada.get("produto_marca")
+
 			mapeamento[sequencia_int] = _RespostaGroq(
 				categoria=str(categoria),
 				confianca=_normalizar_conf(entrada.get("confianca")),
 				justificativa=cast(str | None, entrada.get("justificativa") or entrada.get("motivo")),
+				produto_nome=cast(str | None, produto_nome),
+				produto_marca=cast(str | None, produto_marca),
 			)
 		return mapeamento
 

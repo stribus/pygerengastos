@@ -57,6 +57,10 @@ def test_groq_classifier_interpreta_json_e_retorna_resultados():
 									"categoria": "Alimentação",
 									"confianca": 0.88,
 									"justificativa": "alimento básico",
+									"produto": {
+										"nome_base": "Arroz Integral",
+										"marca_base": "Tio João",
+									},
 								}
 							]
 						}
@@ -75,6 +79,8 @@ def test_groq_classifier_interpreta_json_e_retorna_resultados():
 	resultado = resultados[0]
 	assert resultado.categoria == "Alimentação"
 	assert resultado.confianca == 0.88
+	assert resultado.produto_nome == "Arroz Integral"
+	assert resultado.produto_marca == "Tio João"
 	assert resultado.modelo == classifier.model
 	assert resultado.resposta_json is not None
 	client.close()
