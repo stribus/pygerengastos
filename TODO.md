@@ -32,7 +32,9 @@
     - [ ] Normalizar consultas de resumo (views ou tabelas materializadas) para suportar dashboards mensais.
     - [ ] Adicionar constraints/defaults para garantir integridade de `emissao_iso` e `valor_total`.
   - [ ] Popular catálogo inicial de categorias a partir do CSV fornecido e permitir edição.
-    - [ ] Invocar `seed_categorias_csv` no setup inicial e expor manutenção básica na UI.
+    - [x] Invocar `seed_categorias_csv` no setup inicial e expor manutenção básica na UI.
+- [x] **Infraestrutura**
+  - [x] Implementar módulo de logs centralizado (`src/logger.py`) e instrumentar fluxos críticos.
 - [ ] **Visualização**
   - [ ] criar interface ´home´ intuitiva e funcional
     - [ ] Definir layout responsivo com cabeçalho, KPIs resumidos e navegação entre seções.

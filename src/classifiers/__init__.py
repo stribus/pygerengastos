@@ -12,8 +12,11 @@ from src.database import (
 	obter_categoria_de_produto,
 )
 
+from src.logger import setup_logging
 from .groq import ClassificacaoResultado, GroqClassifier
 from .embeddings import buscar_produtos_semelhantes
+
+logger = setup_logging("classifiers")
 
 __all__ = [
 	"ClassificacaoResultado",
@@ -35,8 +38,10 @@ def classificar_itens_pendentes(
 
 	itens = listar_itens_para_classificacao(limit=limit, db_path=db_path)
 	if not itens:
+		logger.info("Nenhum item pendente de classificação.")
 		return []
 
+	logger.info(f"Iniciando classificação de {len(itens)} itens.")
 	resultados_finais: list[ClassificacaoResultado] = []
 	itens_para_groq: list[ItemParaClassificacao] = []
 
@@ -51,6 +56,7 @@ def classificar_itens_pendentes(
 			if produto_id:
 				categoria = obter_categoria_de_produto(int(produto_id), db_path=db_path)
 				if categoria:
+					logger.debug(f"Match semântico encontrado para '{item.descricao}': {categoria} (score: {match.get('score')})")
 					resultados_finais.append(
 						ClassificacaoResultado(
 							chave_acesso=item.chave_acesso,
@@ -84,10 +90,12 @@ def classificar_itens_pendentes(
 			else:
 				classifier = GroqClassifier(categorias=categorias)
 
+		logger.info(f"Enviando {len(itens_para_groq)} itens para a Groq API.")
 		resultados_groq = classifier.classificar_itens(itens_para_groq)
 		resultados_finais.extend(resultados_groq)
 
 	_salvar_resultados(resultados_finais, confirmar=confirmar, db_path=db_path)
+	logger.info(f"Classificação concluída. {len(resultados_finais)} itens processados.")
 	return resultados_finais
 
 

@@ -7,6 +7,10 @@ import re
 import httpx
 from bs4 import BeautifulSoup, Tag
 
+from src.logger import setup_logging
+
+logger = setup_logging("scrapers.receita_rs")
+
 SoupNode = Tag | BeautifulSoup
 
 NFCE_POST_URL = "https://www.sefaz.rs.gov.br/ASP/AAE_ROOT/NFE/SAT-WEB-NFE-NFC_2.asp"
@@ -130,7 +134,11 @@ def baixar_html(
         response.raise_for_status()
         html = response.text
         _persistir_html(chave_sanitizada, html, destino_html)
+        logger.info(f"HTML baixado com sucesso para chave {chave_sanitizada}")
         return html
+    except httpx.HTTPError as e:
+        logger.error(f"Erro HTTP ao baixar nota {chave_sanitizada}: {e}")
+        raise
     finally:
         if needs_close:
             session.close()
@@ -159,7 +167,9 @@ def parse_nota(html: str, chave: str) -> NotaFiscal:
     chave_sanitizada = _normalize_chave(chave)
     nota = parse_nfce_html(html)
     if nota.chave_acesso != chave_sanitizada:
+        logger.error(f"Chave extraída ({nota.chave_acesso}) difere da solicitada ({chave_sanitizada})")
         raise ValueError("A chave fornecida não confere com a chave presente no HTML.")
+    logger.info(f"Nota parseada com sucesso: {nota.valor_total} ({len(nota.itens)} itens)")
     return nota
 
 
