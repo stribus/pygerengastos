@@ -711,7 +711,7 @@ def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 			consumidor_nome
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chave_acesso) DO UPDATE SET
-			atualizado_em = CURRENT_TIMESTAMP
+			atualizado_em = now()
 		""",
 		[
 			nota.chave_acesso,
@@ -766,7 +766,7 @@ def _persistir_itens(
 				fonte_classificacao,
 				confianca_classificacao,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, now())
 			""",
 			[
 				chave,
@@ -943,3 +943,72 @@ def obter_categoria_de_produto(produto_id: int, *, db_path: Path | str | None = 
 			[produto_id],
 		).fetchone()
 		return row[0] if row else None
+
+
+def obter_kpis_gerais(*, db_path: Path | str | None = None) -> dict[str, Any]:
+	"""Retorna KPIs gerais para o dashboard."""
+	with conexao(db_path) as con:
+		# Total de notas
+		total_notas = con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
+		
+		# Total gasto (soma de valor_total das notas)
+		total_gasto = con.execute("SELECT SUM(valor_total) FROM notas").fetchone()[0]
+		
+		# Itens pendentes de classificação
+		itens_pendentes = con.execute(
+			"SELECT COUNT(*) FROM itens WHERE categoria_confirmada IS NULL"
+		).fetchone()[0]
+
+	return {
+		"total_notas": total_notas or 0,
+		"total_gasto": _para_decimal(total_gasto) or Decimal("0.00"),
+		"itens_pendentes": itens_pendentes or 0,
+	}
+
+
+def obter_resumo_mensal(*, db_path: Path | str | None = None) -> list[dict[str, Any]]:
+	"""Retorna gastos agrupados por mês (YYYY-MM)."""
+	with conexao(db_path) as con:
+		rows = con.execute(
+			"""
+			SELECT strftime(CAST(emissao_iso AS DATE), '%Y-%m') as mes, SUM(valor_total)
+			FROM notas
+			WHERE emissao_iso IS NOT NULL
+			GROUP BY 1
+			ORDER BY 1 DESC
+			LIMIT 12
+			"""
+		).fetchall()
+	
+	return [
+		{"mes": row[0], "total": _para_decimal(row[1]) or Decimal("0.00")}
+		for row in rows
+	]
+
+
+def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | str | None = None) -> list[dict[str, Any]]:
+	"""Retorna gastos agrupados por categoria. Opcionalmente filtra por mês."""
+	
+	where_clause = "WHERE i.categoria_confirmada IS NOT NULL"
+	params = []
+	
+	if mes_iso:
+		where_clause += " AND strftime(CAST(n.emissao_iso AS DATE), '%Y-%m') = ?"
+		params.append(mes_iso)
+		
+	query = f"""
+		SELECT i.categoria_confirmada, SUM(i.valor_total)
+		FROM itens i
+		JOIN notas n ON n.chave_acesso = i.chave_acesso
+		{where_clause}
+		GROUP BY 1
+		ORDER BY 2 DESC
+	"""
+	
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+		
+	return [
+		{"categoria": row[0], "total": _para_decimal(row[1]) or Decimal("0.00")}
+		for row in rows
+	]
