@@ -60,16 +60,40 @@ def render_pagina_analise() -> None:
     st.header("Análise e revisão de notas")
     st.write("Selecione uma nota para revisar categorias, nomes base e marcas antes de confirmar.")
 
+    flash_msgs = st.session_state.pop("flash_analisar_msgs", [])
+    for alerta in flash_msgs:
+        tipo = (alerta or {}).get("tipo", "info")
+        texto = (alerta or {}).get("texto")
+        if not texto:
+            continue
+        if tipo == "success":
+            st.success(texto)
+        elif tipo == "warning":
+            st.warning(texto)
+        elif tipo == "error":
+            st.error(texto)
+        else:
+            st.info(texto)
+
     filtro_notas = st.checkbox("Mostrar somente notas com itens pendentes", value=True)
     notas = listar_notas_para_revisao(limit=100, somente_pendentes=filtro_notas)
     if not notas:
         st.info("Nenhuma nota disponível para revisão.")
         return
 
+    nota_destaque = st.session_state.pop("nota_em_revisao", None)
+    indice_padrao = 0
+    if nota_destaque:
+        for idx, item in enumerate(notas):
+            if item.chave_acesso == nota_destaque:
+                indice_padrao = idx
+                break
+
     indice = st.selectbox(
         "Escolha a nota",
         options=list(range(len(notas))),
         format_func=lambda idx: _formatar_rotulo(notas[idx]),
+        index=indice_padrao,
     )
     nota = notas[indice]
 
@@ -108,6 +132,7 @@ def render_pagina_analise() -> None:
             "Revisor responsável (opcional)",
             value=st.session_state.get("usuario_revisao", ""),
         )
+        usuario_limpo = (usuario or "").strip()
         observacoes = st.text_area(
             "Observações adicionais",
             placeholder="Ex.: Ajuste confirmado com base em embalagem física.",
@@ -117,8 +142,8 @@ def render_pagina_analise() -> None:
         salvar = col_a.form_submit_button("Salvar rascunho", type="secondary")
         confirmar = col_b.form_submit_button("Confirmar ajustes", type="primary")
 
-    if usuario:
-        st.session_state["usuario_revisao"] = usuario
+    if usuario_limpo:
+        st.session_state["usuario_revisao"] = usuario_limpo
 
     if salvar or confirmar:
         registros = _converter_registros(df_editado, nota.chave_acesso, observacoes)
@@ -126,8 +151,8 @@ def render_pagina_analise() -> None:
             registrar_revisoes_manuais(
                 registros,
                 confirmar=confirmar,
-                usuario=usuario.strip() or None,
-                observacoes_padrao=observacoes.strip() or None,
+                usuario=usuario_limpo or None,
+                observacoes_padrao=(observacoes or "").strip() or None,
             )
         except Exception as exc:  # pragma: no cover - interação manual
             st.error(f"Não foi possível registrar a revisão: {exc}")
@@ -139,7 +164,7 @@ def render_pagina_analise() -> None:
             st.info("Rascunho salvo. Confirme quando finalizar a revisão.")
 
         # atualizar dados em memória
-        st.experimental_rerun()
+        st.rerun()
 
     historico = listar_revisoes_manuais(nota.chave_acesso, limit=15)
     if historico:

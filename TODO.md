@@ -9,7 +9,7 @@
 
 - ✅ Scraper da SEFAZ-RS usa POST no endpoint `SAT-WEB-NFE-NFC_2.asp`, simula cabeçalhos do navegador e salva o HTML bruto para depuração.
 - ✅ Testes automatizados (`tests/test_receita_rs.py`) cobrindo totais, pagamentos e itens a partir do HTML de exemplo.
-- 🚧 Próximo foco imediato: Normalizar consultas de resumo (views ou tabelas materializadas) para suportar dashboards mensais.
+- 🚧 Próximo foco imediato: Considerar um call-to-action direto para a aba “Analisar notas” após a tabela, facilitando a confirmação manual ainda na mesma sessão.
 
 ## Etapas prioritárias
 
@@ -24,6 +24,7 @@
   - [x] Identificar produto (nome base + marca) junto com a categoria para permitir agrupamentos.
   - [x] Expor mecanismo de revisão manual para ajustes (UI/backend ainda inexistentes — apenas flag `confirmar` via backend).
   - [x] Construir tela Streamlit para listar itens pendentes, permitir edição de categoria/produto e confirmar ajustes.
+  - [] Permitir reclassificação manual por usuário em caso de erro da IA.
   - [x] Criar endpoint/função de serviço que receba a decisão manual e reutilize `registrar_classificacao_itens(confirmar=True)`.
   - [x] Registrar histórico da revisão (usuario, timestamp) para auditoria.
 - [ ] **Armazenamento e análise**
@@ -51,5 +52,4 @@
 ## Observações futuras
 
 - Adicionar cache e paginação para listas grandes de notas.
-- Permitir reclassificação manual por usuário em caso de erro da IA.
 - Explorar alertas/limites mensais para manter orçamento controlado.

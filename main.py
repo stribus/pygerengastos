@@ -23,14 +23,15 @@ def main() -> None:
 		st.error("Erro crítico ao iniciar banco de dados.")
 
 	st.sidebar.title("Navegação")
+	paginas = ("Home", "Importar nota", "Analisar notas")
+	if "menu_navegacao" not in st.session_state:
+		st.session_state["menu_navegacao"] = paginas[0]
 	opcao = st.sidebar.radio(
 		"Selecione uma área",
-		(
-			"Home",
-			"Importar nota",
-			"Analisar notas",
-		),
+		paginas,
+		key="menu_navegacao",
 	)
+	st.session_state["menu_navegacao"] = opcao
 
 	if opcao == "Home":
 		render_home()
