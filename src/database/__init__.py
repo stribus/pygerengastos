@@ -872,13 +872,22 @@ def seed_categorias_csv(
 
 
 def listar_itens_para_classificacao(
-	*, limit: int = 25, apenas_sem_categoria: bool = True, db_path: Path | str | None = None
+	*,
+	limit: int = 25,
+	apenas_sem_categoria: bool = True,
+	chave_acesso: str | None = None,
+	db_path: Path | str | None = None,
 ) -> list[ItemParaClassificacao]:
 	"""Retorna itens ainda não classificados para uso pela IA."""
 
 	where_clauses = ["i.categoria_confirmada IS NULL"]
+	params: list[object] = []
 	if apenas_sem_categoria:
 		where_clauses.append("i.categoria_sugerida IS NULL")
+	chave_normalizada = chave_acesso.strip() if chave_acesso else None
+	if chave_normalizada:
+		where_clauses.append("i.chave_acesso = ?")
+		params.append(chave_normalizada)
 	where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
 	with conexao(db_path) as con:
@@ -903,7 +912,7 @@ def listar_itens_para_classificacao(
 			ORDER BY n.emissao_iso DESC, i.chave_acesso, i.sequencia
 			LIMIT ?
 			""",
-			[limit],
+			[*params, limit],
 		).fetchall()
 
 	return [

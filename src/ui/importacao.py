@@ -4,7 +4,8 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from src.database import salvar_nota
+from src.classifiers import classificar_itens_pendentes
+from src.database import listar_itens_para_revisao, salvar_nota
 from src.scrapers import receita_rs
 
 
@@ -47,6 +48,59 @@ def _exibir_resumo_nota(nota: receita_rs.NotaFiscal) -> None:
 			],
 			height=300,
 		)
+
+
+		def _executar_classificacao_para_nota(nota: receita_rs.NotaFiscal) -> None:
+			"""Dispara a classificação automática e exibe os resultados ao usuário."""
+			quantidade_itens = nota.total_itens or len(nota.itens)
+			limite = max(int(quantidade_itens or 0), 1)
+			try:
+				with st.spinner("Classificando itens automaticamente..."):
+					resultados = classificar_itens_pendentes(
+						limit=limite,
+						confirmar=False,
+						chave_acesso=nota.chave_acesso,
+					)
+			except Exception as exc:  # pragma: no cover - interação manual
+				st.error(f"Não foi possível classificar os itens automaticamente: {exc}")
+				return
+
+			if not resultados:
+				st.warning(
+					"Nenhum item pendente foi localizado para classificação automática nesta nota."
+				)
+				_mostrar_itens_classificados(nota.chave_acesso)
+				return
+
+			st.success(f"Classificação concluída para {len(resultados)} item(ns). Revise abaixo antes de confirmar.")
+			_mostrar_itens_classificados(nota.chave_acesso)
+
+
+		def _mostrar_itens_classificados(chave_acesso: str) -> None:
+			"""Exibe uma tabela com categorias sugeridas e status após classificação."""
+			itens = listar_itens_para_revisao(chave_acesso, somente_pendentes=False)
+			if not itens:
+				st.info("Ainda não há itens registrados para esta nota no banco de dados.")
+				return
+
+			st.subheader("Categorias sugeridas pelos serviços de IA")
+			linhas: List[Dict[str, Any]] = []
+			for item in itens:
+				status = "Confirmada" if item.categoria_confirmada else ("Sugerida" if item.categoria_sugerida else "Pendente")
+				linhas.append(
+					{
+						"Seq.": item.sequencia,
+						"Descrição": item.descricao,
+						"Categoria sugerida": item.categoria_sugerida or "—",
+						"Categoria confirmada": item.categoria_confirmada or "—",
+						"Produto": item.produto_nome or "—",
+						"Marca": item.produto_marca or "—",
+						"Valor total": float(item.valor_total or 0),
+						"Status": status,
+					}
+				)
+
+			st.dataframe(linhas, hide_index=True, use_container_width=True)
 
 
 def render_pagina_importacao() -> None:
@@ -109,9 +163,7 @@ def render_pagina_importacao() -> None:
 	_registrar_historico(resultado)
 
 	if executar_classificacao:
-		st.info(
-			"Classificação automática ainda não foi integrada à UI, mas os itens já estão disponíveis para o serviço Groq."
-		)
+		_executar_classificacao_para_nota(nota)
 
 	st.caption("Dica: utilize a aba de análise para revisar categorias antes de confirmar.")
 	_renderizar_historico()

@@ -33,15 +33,26 @@ def classificar_itens_pendentes(
 	classifier: GroqClassifier | None = None,
 	model: str | None = None,
 	temperature: float | None = None,
+	chave_acesso: str | None = None,
 ) -> list[ClassificacaoResultado]:
 	"""Busca itens sem categoria, envia para a Groq e persiste o resultado."""
 
-	itens = listar_itens_para_classificacao(limit=limit, db_path=db_path)
+	itens = listar_itens_para_classificacao(
+		limit=limit,
+		chave_acesso=chave_acesso,
+		db_path=db_path,
+	)
 	if not itens:
-		logger.info("Nenhum item pendente de classificação.")
+		if chave_acesso:
+			logger.info("Nenhum item pendente encontrado para a nota %s.", chave_acesso)
+		else:
+			logger.info("Nenhum item pendente de classificação.")
 		return []
 
-	logger.info(f"Iniciando classificação de {len(itens)} itens.")
+	if chave_acesso:
+		logger.info("Iniciando classificação de %s itens para a nota %s.", len(itens), chave_acesso)
+	else:
+		logger.info(f"Iniciando classificação de {len(itens)} itens.")
 	resultados_finais: list[ClassificacaoResultado] = []
 	itens_para_groq: list[ItemParaClassificacao] = []
 

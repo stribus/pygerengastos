@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence, cast
+from unittest.mock import patch
 import json
 import os
 
@@ -121,6 +122,15 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 
 	assert resultados
 	assert classificador.chamadas == 1
+
+
+def test_classificar_itens_pendentes_filtra_por_chave():
+	with patch("src.classifiers.listar_itens_para_classificacao", return_value=[]) as mock_listar:
+		resultados = classificar_itens_pendentes(chave_acesso="ABC123")
+		assert resultados == []
+		assert mock_listar.call_count == 1
+		kwargs = mock_listar.call_args.kwargs
+		assert kwargs["chave_acesso"] == "ABC123"
 
 
 def _salvar_para_tmp(tmp_path, nota):
