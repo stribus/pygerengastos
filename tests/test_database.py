@@ -7,10 +7,14 @@ from src.database import (
     conexao,
     inicializar_banco,
     listar_categorias,
+    listar_itens_para_revisao,
     listar_itens_para_classificacao,
+    listar_itens_padronizados,
     listar_notas,
+    listar_revisoes_manuais,
     normalizar_produto_descricao,
     registrar_classificacao_itens,
+    registrar_revisoes_manuais,
     seed_categorias_csv,
     salvar_nota,
 )
@@ -85,6 +89,33 @@ def test_listar_itens_para_classificacao_retorna_itens(tmp_path):
 	primeiro = itens[0]
 	assert primeiro.descricao == nota.itens[0].descricao
 	assert primeiro.categoria_sugerida is None
+
+
+def test_listar_itens_para_revisao_filtra_pendentes(tmp_path):
+    db_path = tmp_path / "test.duckdb"
+    nota = _nota_exemplo()
+
+    salvar_nota(nota, db_path=db_path)
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentos",
+                "origem": "teste",
+                "modelo": "pytest",
+            }
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    itens_todos = listar_itens_para_revisao(CHAVE, db_path=db_path)
+    itens_pendentes = listar_itens_para_revisao(CHAVE, somente_pendentes=True, db_path=db_path)
+
+    assert len(itens_todos) == len(nota.itens)
+    assert len(itens_pendentes) == len(nota.itens) - 1
+    assert all(item.categoria_confirmada is None for item in itens_pendentes)
 
 
 def test_seed_categorias_csv_insere_sem_duplicar(tmp_path):
@@ -191,3 +222,72 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     assert item_row[5] == "Arroz Integral"
     assert item_row[6] == "Tio João"
     assert registros_historico == 1
+
+
+def test_registrar_revisoes_manuais_salva_historico(tmp_path):
+    db_path = tmp_path / "test.duckdb"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    registros = [
+        {
+            "chave_acesso": CHAVE,
+            "sequencia": 1,
+            "categoria": "higiene",
+            "produto_nome": "Sabonete",
+            "produto_marca": "Marca X",
+            "observacoes": "ajuste manual",
+        }
+    ]
+
+    registrar_revisoes_manuais(
+        registros,
+        confirmar=True,
+        usuario="ana",
+        observacoes_padrao="confirmação",
+        db_path=db_path,
+    )
+
+    with conexao(db_path) as con:
+        item_row = con.execute(
+            """
+            SELECT categoria_confirmada, produto_nome, produto_marca
+            FROM itens
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        ).fetchone()
+        revisoes_total = con.execute(
+            "SELECT COUNT(*) FROM revisoes_manuais WHERE chave_acesso = ?",
+            [CHAVE],
+        ).fetchone()
+
+    assert item_row is not None
+    assert item_row[0] == "higiene"
+    assert item_row[1] == "Sabonete"
+    assert item_row[2] == "Marca X"
+    assert revisoes_total is not None and revisoes_total[0] == 1
+
+    historico = listar_revisoes_manuais(CHAVE, db_path=db_path)
+    assert historico
+    registro_hist = historico[0]
+    assert registro_hist.usuario == "ana"
+    assert registro_hist.confirmado is True
+    assert registro_hist.observacoes == "ajuste manual"
+
+
+def test_listar_itens_padronizados_retorna_dimensoes(tmp_path):
+    db_path = tmp_path / "test.duckdb"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    itens = listar_itens_padronizados(db_path=db_path, limit=10)
+    assert itens
+    item = itens[0]
+    assert item.estabelecimento_nome == nota.emitente_nome
+    assert item.estabelecimento_cnpj == nota.emitente_cnpj
+    assert item.data_emissao is not None
+    assert item.ano is None or item.ano >= 2000
+    assert item.categoria is None
+    assert item.quantidade == nota.itens[0].quantidade
+    assert item.valor_total == nota.itens[0].valor_total

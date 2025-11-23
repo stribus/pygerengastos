@@ -10,6 +10,7 @@ from src.database import (
     NotaParaRevisao,
     listar_itens_para_revisao,
     listar_notas_para_revisao,
+    listar_revisoes_manuais,
     registrar_revisoes_manuais,
 )
 
@@ -139,3 +140,23 @@ def render_pagina_analise() -> None:
 
         # atualizar dados em memória
         st.experimental_rerun()
+
+    historico = listar_revisoes_manuais(nota.chave_acesso, limit=15)
+    if historico:
+        st.subheader("Histórico recente de revisões")
+        df_hist = pd.DataFrame(
+            [
+                {
+                    "Data": rev.criado_em,
+                    "Seq.": rev.sequencia,
+                    "Categoria": rev.categoria or "—",
+                    "Produto": rev.produto_nome or "—",
+                    "Marca": rev.produto_marca or "—",
+                    "Usuário": rev.usuario or "—",
+                    "Confirmado": "Sim" if rev.confirmado else "Não",
+                    "Observações": rev.observacoes or "—",
+                }
+                for rev in historico
+            ]
+        )
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)

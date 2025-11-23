@@ -3,8 +3,6 @@
 Este módulo fornece utilitários para criar o schema padrão do sistema,
 persistir notas fiscais extraídas do portal da Receita Gaúcha e recuperar
 informações para etapas posteriores (classificação, dashboards, etc.).
-
-As funções expostas aqui não têm a pretensão de serem definitivas; elas
 servem como primeira iteração da camada de armazenamento, permitindo que as
 demais partes do projeto evoluam em paralelo."""
 
@@ -33,26 +31,6 @@ DEFAULT_CATEGORIAS_CSV = _BASE_DIR / "data" / "categorias.csv"
 
 _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	"""
-	CREATE TABLE IF NOT EXISTS notas (
-		chave_acesso VARCHAR PRIMARY KEY,
-		emitente_nome TEXT,
-		emitente_cnpj TEXT,
-		emitente_endereco TEXT,
-		numero VARCHAR,
-		serie VARCHAR,
-		emissao_texto TEXT,
-		emissao_iso TEXT,
-		total_itens INTEGER,
-		valor_total DECIMAL(18, 2),
-		valor_pago DECIMAL(18, 2),
-		tributos DECIMAL(18, 2),
-		consumidor_cpf TEXT,
-		consumidor_nome TEXT,
-		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-	)
-	""",
-	"""
 	CREATE SEQUENCE IF NOT EXISTS seq_categorias START 1
 	""",
 	"""
@@ -68,6 +46,57 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	""",
 	"""
 	CREATE SEQUENCE IF NOT EXISTS seq_produtos START 1
+	""",
+	"""
+	CREATE SEQUENCE IF NOT EXISTS seq_estabelecimentos START 1
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS estabelecimentos (
+		id INTEGER PRIMARY KEY DEFAULT nextval('seq_estabelecimentos'),
+		nome TEXT,
+		cnpj TEXT,
+		cnpj_normalizado TEXT,
+		endereco TEXT,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (cnpj_normalizado)
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS datas_referencia (
+		data_iso DATE PRIMARY KEY,
+		ano SMALLINT NOT NULL,
+		mes SMALLINT NOT NULL,
+		dia SMALLINT NOT NULL,
+		ano_mes TEXT NOT NULL,
+		trimestre SMALLINT NOT NULL,
+		semana SMALLINT NOT NULL,
+		nome_mes TEXT NOT NULL,
+		nome_dia_semana TEXT NOT NULL,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS notas (
+		chave_acesso VARCHAR PRIMARY KEY,
+		emitente_nome TEXT,
+		emitente_cnpj TEXT,
+		emitente_endereco TEXT,
+		numero VARCHAR,
+		serie VARCHAR,
+		emissao_texto TEXT,
+		emissao_iso TEXT,
+		emissao_data DATE,
+		estabelecimento_id INTEGER REFERENCES estabelecimentos(id),
+		total_itens INTEGER,
+		valor_total DECIMAL(18, 2),
+		valor_pago DECIMAL(18, 2),
+		tributos DECIMAL(18, 2),
+		consumidor_cpf TEXT,
+		consumidor_nome TEXT,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)
 	""",
 	"""
 	CREATE TABLE IF NOT EXISTS produtos (
@@ -93,6 +122,24 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	)
 	""",
 	"""
+	CREATE SEQUENCE IF NOT EXISTS seq_revisoes_manuais START 1
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS revisoes_manuais (
+		id INTEGER PRIMARY KEY DEFAULT nextval('seq_revisoes_manuais'),
+		chave_acesso VARCHAR NOT NULL,
+		sequencia INTEGER NOT NULL,
+		categoria TEXT,
+		produto_nome TEXT,
+		produto_marca TEXT,
+		usuario TEXT,
+		observacoes TEXT,
+		origem TEXT,
+		confirmado BOOLEAN DEFAULT FALSE,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)
+	""",
+	"""
 	CREATE TABLE IF NOT EXISTS itens (
 		chave_acesso VARCHAR,
 		sequencia INTEGER,
@@ -107,6 +154,8 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		produto_marca TEXT,
 		categoria_sugerida TEXT,
 		categoria_confirmada TEXT,
+		categoria_sugerida_id INTEGER REFERENCES categorias(id),
+		categoria_confirmada_id INTEGER REFERENCES categorias(id),
 		fonte_classificacao TEXT,
 		confianca_classificacao DOUBLE,
 		atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -134,6 +183,37 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)
 	""",
+	"""
+	CREATE VIEW IF NOT EXISTS vw_itens_padronizados AS
+	SELECT
+		i.chave_acesso,
+		i.sequencia,
+		n.emissao_data AS data_emissao,
+		d.ano,
+		d.mes,
+		d.dia,
+		d.ano_mes,
+		d.trimestre,
+		d.semana,
+		d.nome_mes,
+		d.nome_dia_semana,
+		n.estabelecimento_id,
+		e.nome AS estabelecimento_nome,
+		e.cnpj AS estabelecimento_cnpj,
+		e.endereco AS estabelecimento_endereco,
+		COALESCE(i.categoria_confirmada, i.categoria_sugerida) AS categoria_final,
+		COALESCE(i.categoria_confirmada_id, i.categoria_sugerida_id) AS categoria_final_id,
+		i.quantidade,
+		i.valor_unitario,
+		i.valor_total,
+		i.produto_id,
+		i.produto_nome,
+		i.produto_marca
+	FROM itens i
+	JOIN notas n ON n.chave_acesso = i.chave_acesso
+	LEFT JOIN datas_referencia d ON d.data_iso = n.emissao_data
+	LEFT JOIN estabelecimentos e ON e.id = n.estabelecimento_id
+	""",
 )
 
 _SCHEMA_MIGRATIONS: tuple[str, ...] = (
@@ -145,6 +225,18 @@ _SCHEMA_MIGRATIONS: tuple[str, ...] = (
 	""",
 	"""
 	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_marca TEXT
+	""",
+	"""
+	ALTER TABLE notas ADD COLUMN IF NOT EXISTS emissao_data DATE
+	""",
+	"""
+	ALTER TABLE notas ADD COLUMN IF NOT EXISTS estabelecimento_id INTEGER
+	""",
+	"""
+	ALTER TABLE itens ADD COLUMN IF NOT EXISTS categoria_sugerida_id INTEGER
+	""",
+	"""
+	ALTER TABLE itens ADD COLUMN IF NOT EXISTS categoria_confirmada_id INTEGER
 	""",
 )
 
@@ -206,6 +298,128 @@ class ItemNotaRevisao:
 	produto_marca: str | None
 
 
+@dataclass(slots=True)
+class ItemPadronizado:
+	chave_acesso: str
+	sequencia: int
+	data_emissao: str | None
+	ano: int | None
+	mes: int | None
+	ano_mes: str | None
+	estabelecimento_id: int | None
+	estabelecimento_nome: str | None
+	estabelecimento_cnpj: str | None
+	categoria: str | None
+	categoria_id: int | None
+	valor_total: Decimal | None
+	quantidade: Decimal | None
+
+
+@dataclass(slots=True)
+class RevisaoManual:
+	chave_acesso: str
+	sequencia: int
+	categoria: str | None
+	produto_nome: str | None
+	produto_marca: str | None
+	usuario: str | None
+	observacoes: str | None
+	origem: str | None
+	confirmado: bool
+	criado_em: str | None
+
+
+def _criar_produto(
+	con: duckdb.DuckDBPyConnection,
+	nome_base: str,
+	marca_base: str | None = None,
+	categoria_id: int | None = None,
+) -> ProdutoPadronizado:
+	"""Cria (ou retorna) um produto padronizado para uso interno e testes."""
+	nome = (nome_base or "").strip()
+	marca = marca_base.strip() if marca_base else None
+	if not nome:
+		raise ValueError("nome_base não pode ser vazio")
+	try:
+		row = con.execute(
+			"""
+			INSERT INTO produtos (nome_base, marca_base, categoria_id)
+			VALUES (?, ?, ?)
+			RETURNING id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+			""",
+			[nome, marca, categoria_id],
+		).fetchone()
+	except duckdb.Error:
+		row = con.execute(
+			"""
+			SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+			FROM produtos
+			WHERE lower(nome_base) = lower(?) AND COALESCE(marca_base, '') = COALESCE(?, '')
+			ORDER BY id DESC
+			LIMIT 1
+			""",
+			[nome, marca or ""],
+		).fetchone()
+	if not row:
+		raise RuntimeError("Não foi possível criar ou recuperar o produto")
+	return ProdutoPadronizado(
+		id=row[0],
+		nome_base=row[1],
+		marca_base=row[2],
+		categoria_id=row[3],
+		criado_em=row[4],
+		atualizado_em=row[5],
+	)
+
+
+def _buscar_produto_por_descricao_similaridade(
+	con: duckdb.DuckDBPyConnection,
+	descricao: str,
+	*,
+	score_minimo: float | None = None,
+	top_k: int = 3,
+) -> ProdutoPadronizado | None:
+	"""Busca um produto por similaridade via embeddings Chroma."""
+	texto = (descricao or "").strip()
+	if not texto:
+		return None
+	try:
+		from src.classifiers.embeddings import buscar_produtos_semelhantes
+	except ImportError:
+		return None
+	limite = score_minimo if score_minimo is not None else _SIMILARIDADE_MINIMA
+	matches = buscar_produtos_semelhantes(texto, top_k=top_k)
+	for match in matches:
+		produto_id = match.get("produto_id")
+		if produto_id in (None, ""):
+			continue
+		try:
+			produto_id_int = int(produto_id)
+		except (TypeError, ValueError):
+			continue
+		score = match.get("score") or match.get("similaridade")
+		if score is None or float(score) < limite:
+			continue
+		row = con.execute(
+			"""
+			SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+			FROM produtos
+			WHERE id = ?
+			""",
+			[produto_id_int],
+		).fetchone()
+		if row:
+			return ProdutoPadronizado(
+				id=row[0],
+				nome_base=row[1],
+				marca_base=row[2],
+				categoria_id=row[3],
+				criado_em=row[4],
+				atualizado_em=row[5],
+			)
+	return None
+
+
 _MARCAS_CONHECIDAS: dict[str, str] = {
 	"TIO JOAO": "Tio João",
 	"TIO JOÃO": "Tio João",
@@ -240,6 +454,8 @@ _STOPWORDS_DESCRICAO = {
 	"E",
 }
 
+_SIMILARIDADE_MINIMA = 0.82
+
 _UNIDADES_REGEX = re.compile(
 	r"\b\d+[.,]?\d*\s*(kg|g|mg|l|ml|un|und|cx|pct|pct\.|pack|lt|sache|sachê|cartela|garrafa|lata|pt|pacote)\b",
 	re.IGNORECASE,
@@ -247,8 +463,30 @@ _UNIDADES_REGEX = re.compile(
 
 _PONTOS_REGEX = re.compile(r"[.,;:/\\-]+")
 
+_MESES_PT = (
+	"janeiro",
+	"fevereiro",
+	"março",
+	"abril",
+	"maio",
+	"junho",
+	"julho",
+	"agosto",
+	"setembro",
+	"outubro",
+	"novembro",
+	"dezembro",
+)
 
-_SIMILARIDADE_MINIMA = 0.82
+_DIAS_SEMANA_PT = (
+	"segunda-feira",
+	"terça-feira",
+	"quarta-feira",
+	"quinta-feira",
+	"sexta-feira",
+	"sábado",
+	"domingo",
+)
 
 
 def normalizar_produto_descricao(descricao: str | None) -> tuple[str, Optional[str]]:
@@ -341,6 +579,90 @@ def salvar_nota(nota: NotaFiscal, *, db_path: Path | str | None = None) -> None:
 			raise
 
 
+def carregar_nota(
+	chave_acesso: str,
+	*,
+	db_path: Path | str | None = None,
+) -> NotaFiscal | None:
+	"""Reconstrói uma nota fiscal completa a partir do DuckDB."""
+	with conexao(db_path) as con:
+		nota_row = con.execute(
+			"""
+			SELECT
+				emitente_nome,
+				emitente_cnpj,
+				emitente_endereco,
+				numero,
+				serie,
+				emissao_texto,
+				emissao_iso,
+				emissao_data,
+				total_itens,
+				valor_total,
+				valor_pago,
+				tributos,
+				consumidor_cpf,
+				consumidor_nome
+			FROM notas
+			WHERE chave_acesso = ?
+			""",
+			[chave_acesso],
+		).fetchone()
+		if nota_row is None:
+			return None
+		itens_rows = con.execute(
+			"""
+			SELECT descricao, codigo, quantidade, unidade, valor_unitario, valor_total
+			FROM itens
+			WHERE chave_acesso = ?
+			ORDER BY sequencia
+			""",
+			[chave_acesso],
+		).fetchall()
+		pagamentos_rows = con.execute(
+			"""
+			SELECT forma, valor
+			FROM pagamentos
+			WHERE chave_acesso = ?
+			""",
+			[chave_acesso],
+		).fetchall()
+
+	itens = [
+		NotaItem(
+			descricao=row[0],
+			codigo=row[1],
+			quantidade=_para_decimal(row[2]) or Decimal("0"),
+			unidade=row[3] or "",
+			valor_unitario=_para_decimal(row[4]) or Decimal("0"),
+			valor_total=_para_decimal(row[5]) or Decimal("0"),
+		)
+		for row in itens_rows
+	]
+	pagamentos = [
+		Pagamento(forma=row[0], valor=_para_decimal(row[1]) or Decimal("0"))
+		for row in pagamentos_rows
+	]
+
+	return NotaFiscal(
+		chave_acesso=chave_acesso,
+		emitente_nome=nota_row[0],
+		emitente_cnpj=nota_row[1],
+		emitente_endereco=nota_row[2],
+		numero=nota_row[3],
+		serie=nota_row[4],
+		emissao=nota_row[5] or nota_row[6] or nota_row[7],
+		itens=itens,
+		total_itens=nota_row[8],
+		valor_total=_para_decimal(nota_row[9]),
+		valor_pago=_para_decimal(nota_row[10]),
+		tributos=_para_decimal(nota_row[11]),
+		consumidor_cpf=nota_row[12],
+		consumidor_nome=nota_row[13],
+		pagamentos=pagamentos,
+	)
+
+
 def listar_notas(
 	*, limit: int = 50, offset: int = 0, db_path: Path | str | None = None
 ) -> list[dict[str, object]]:
@@ -429,6 +751,56 @@ def listar_notas_para_revisao(
 			valor_total=_para_decimal(row[3]),
 			total_itens=int(row[4] or 0),
 			itens_pendentes=int(row[5] or 0),
+		)
+		for row in rows
+	]
+
+
+def listar_itens_para_revisao(
+	chave_acesso: str,
+	*,
+	somente_pendentes: bool = False,
+	db_path: Path | str | None = None,
+) -> list[ItemNotaRevisao]:
+	"""Retorna itens de uma nota para revisão manual via UI."""
+
+	if not chave_acesso:
+		return []
+
+	condicoes = ["chave_acesso = ?"]
+	params: list[object] = [chave_acesso]
+	if somente_pendentes:
+		condicoes.append("categoria_confirmada IS NULL")
+	query = f"""
+		SELECT
+			chave_acesso,
+			sequencia,
+			descricao,
+			quantidade,
+			valor_total,
+			categoria_sugerida,
+			categoria_confirmada,
+			produto_nome,
+			produto_marca
+		FROM itens
+		WHERE {' AND '.join(condicoes)}
+		ORDER BY sequencia
+	"""
+
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+
+	return [
+		ItemNotaRevisao(
+			chave_acesso=row[0],
+			sequencia=int(row[1]),
+			descricao=row[2],
+			quantidade=_para_decimal(row[3]),
+			valor_total=_para_decimal(row[4]),
+			categoria_sugerida=row[5],
+			categoria_confirmada=row[6],
+			produto_nome=row[7],
+			produto_marca=row[8],
 		)
 		for row in rows
 	]
@@ -553,6 +925,75 @@ def listar_itens_para_classificacao(
 	]
 
 
+def listar_itens_padronizados(
+	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
+	categoria: str | None = None,
+	estabelecimento_id: int | None = None,
+	limit: int | None = 200,
+	db_path: Path | str | None = None,
+) -> list[ItemPadronizado]:
+	"""Retorna itens com datas, estabelecimentos e categorias padronizados."""
+	filtros: list[str] = ["1=1"]
+	params: list[object] = []
+	if data_inicio:
+		filtros.append("data_emissao >= ?")
+		params.append(data_inicio)
+	if data_fim:
+		filtros.append("data_emissao <= ?")
+		params.append(data_fim)
+	if categoria:
+		filtros.append("lower(categoria_final) = lower(?)")
+		params.append(categoria)
+	if estabelecimento_id is not None:
+		filtros.append("estabelecimento_id = ?")
+		params.append(estabelecimento_id)
+	where_clause = " AND ".join(filtros)
+	query = f"""
+		SELECT
+			chave_acesso,
+			sequencia,
+			data_emissao,
+			ano,
+			mes,
+			ano_mes,
+			estabelecimento_id,
+			estabelecimento_nome,
+			estabelecimento_cnpj,
+			categoria_final,
+			categoria_final_id,
+			quantidade,
+			valor_total
+		FROM vw_itens_padronizados
+		WHERE {where_clause}
+		ORDER BY data_emissao DESC NULLS LAST, chave_acesso, sequencia
+	"""
+	if limit is not None:
+		query += " LIMIT ?"
+		params.append(limit)
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+	return [
+		ItemPadronizado(
+			chave_acesso=row[0],
+			sequencia=int(row[1]),
+			data_emissao=row[2],
+			ano=row[3],
+			mes=row[4],
+			ano_mes=row[5],
+			estabelecimento_id=row[6],
+			estabelecimento_nome=row[7],
+			estabelecimento_cnpj=row[8],
+			categoria=row[9],
+			categoria_id=row[10],
+			quantidade=_para_decimal(row[11]),
+			valor_total=_para_decimal(row[12]),
+		)
+		for row in rows
+	]
+
+
 def registrar_classificacao_itens(
 	dados: Sequence[Mapping[str, Any]],
 	*,
@@ -576,6 +1017,7 @@ def registrar_classificacao_itens(
 				modelo = item.get("modelo")
 				obs = item.get("observacoes")
 				resp_json = json.dumps(item.get("resposta_json"), ensure_ascii=False) if item.get("resposta_json") else None
+				categoria_id = _resolver_categoria_id(con, cat)
 				
 				# Campos de produto padronizado
 				prod_nome = item.get("produto_nome")
@@ -595,8 +1037,8 @@ def registrar_classificacao_itens(
 				# 2. Atualizar item
 				# Se confirmar=True, gravamos em categoria_confirmada
 				# Caso contrário, apenas em categoria_sugerida
-				coluna_cat = "categoria_confirmada" if confirmar else "categoria_sugerida"
-				
+				confirmar_item = bool(item.get("confirmar")) or confirmar
+
 				# Se tivermos info de produto, tentamos resolver/criar o produto
 				produto_id = None
 				if prod_nome:
@@ -605,15 +1047,29 @@ def registrar_classificacao_itens(
 						produto_id = produto_obj.id
 
 				# Montar update dinâmico
-				sql_update = f"""
+				sql_update = """
 					UPDATE itens
 					SET
-						{coluna_cat} = ?,
+						categoria_sugerida = ?,
 						fonte_classificacao = ?,
 						confianca_classificacao = ?,
 						atualizado_em = CURRENT_TIMESTAMP
 				"""
 				params = [cat, origem, conf]
+				if categoria_id is not None:
+					sql_update += ", categoria_sugerida_id = ?"
+					params.append(categoria_id)
+				else:
+					sql_update += ", categoria_sugerida_id = NULL"
+
+				if confirmar_item:
+					sql_update += ", categoria_confirmada = ?"
+					params.append(cat)
+					if categoria_id is not None:
+						sql_update += ", categoria_confirmada_id = ?"
+						params.append(categoria_id)
+					else:
+						sql_update += ", categoria_confirmada_id = NULL"
 
 				if produto_id:
 					sql_update += ", produto_id = ?, produto_nome = ?, produto_marca = ?"
@@ -628,6 +1084,142 @@ def registrar_classificacao_itens(
 		except Exception:
 			con.execute("ROLLBACK")
 			raise
+
+
+def registrar_revisoes_manuais(
+	registros: Sequence[Mapping[str, Any]],
+	*,
+	confirmar: bool = False,
+	usuario: str | None = None,
+	observacoes_padrao: str | None = None,
+	db_path: Path | str | None = None,
+) -> None:
+	"""Processa ajustes vindos da UI e registra histórico de revisão."""
+
+	if not registros:
+		return
+
+	usuario_limpo = _limpar_texto_curto(usuario)
+	observacao_padrao = _limpar_texto_curto(observacoes_padrao)
+
+	itens_para_classificar: list[dict[str, Any]] = []
+	logs: list[tuple[object, ...]] = []
+
+	for registro in registros:
+		chave = registro.get("chave_acesso")
+		sequencia = registro.get("sequencia")
+		if not chave or sequencia is None:
+			continue
+		categoria = _limpar_texto_curto(registro.get("categoria"))
+		if not categoria:
+			if confirmar:
+				raise ValueError(
+					f"Categoria obrigatória para confirmar o item {sequencia} da nota {chave}."
+				)
+			continue
+		produto_nome = _limpar_texto_curto(registro.get("produto_nome"))
+		produto_marca = _limpar_texto_curto(registro.get("produto_marca"))
+		observacao = _limpar_texto_curto(registro.get("observacoes")) or observacao_padrao
+
+		payload = {
+			"chave_acesso": chave,
+			"sequencia": int(sequencia),
+			"categoria": categoria,
+			"origem": "revisao_manual",
+			"modelo": "ui_streamlit",
+			"observacoes": observacao,
+			"confirmar": confirmar,
+			"produto_nome": produto_nome,
+			"produto_marca": produto_marca,
+		}
+		itens_para_classificar.append(payload)
+		logs.append(
+			(
+				chave,
+				int(sequencia),
+				categoria,
+				produto_nome,
+				produto_marca,
+				usuario_limpo,
+				observacao,
+				"revisao_manual",
+				bool(confirmar),
+			)
+		)
+
+	if not itens_para_classificar:
+		return
+
+	registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
+
+	with conexao(db_path) as con:
+		for log in logs:
+			con.execute(
+				"""
+				INSERT INTO revisoes_manuais (
+					chave_acesso,
+					sequencia,
+					categoria,
+					produto_nome,
+					produto_marca,
+					usuario,
+					observacoes,
+					origem,
+					confirmado
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				log,
+			)
+
+
+def listar_revisoes_manuais(
+	chave_acesso: str,
+	*,
+	limit: int = 20,
+	db_path: Path | str | None = None,
+) -> list[RevisaoManual]:
+	"""Retorna o histórico de revisões manuais por nota."""
+
+	if not chave_acesso:
+		return []
+
+	with conexao(db_path) as con:
+		rows = con.execute(
+			"""
+			SELECT
+				chave_acesso,
+				sequencia,
+				categoria,
+				produto_nome,
+				produto_marca,
+				usuario,
+				observacoes,
+				origem,
+				confirmado,
+				criado_em
+			FROM revisoes_manuais
+			WHERE chave_acesso = ?
+			ORDER BY criado_em DESC, id DESC
+			LIMIT ?
+			""",
+			[chave_acesso, limit],
+		).fetchall()
+
+	return [
+		RevisaoManual(
+			chave_acesso=row[0],
+			sequencia=int(row[1]),
+			categoria=row[2],
+			produto_nome=row[3],
+			produto_marca=row[4],
+			usuario=row[5],
+			observacoes=row[6],
+			origem=row[7],
+			confirmado=bool(row[8]),
+			criado_em=row[9],
+		)
+		for row in rows
+	]
 
 
 def _resolver_produto_por_nome_marca(
@@ -692,6 +1284,15 @@ def _resolver_produto_por_nome_marca(
 
 
 def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
+	emissao_iso, emissao_data = _converter_data_iso_e_data(nota.emissao)
+	if emissao_data:
+		_garantir_dim_data(con, emissao_data)
+	estabelecimento_id = _obter_ou_criar_estabelecimento(
+		con,
+		nota.emitente_nome,
+		nota.emitente_cnpj,
+		nota.emitente_endereco,
+	)
 	con.execute(
 		"""
 		INSERT INTO notas (
@@ -703,14 +1304,31 @@ def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 			serie,
 			emissao_texto,
 			emissao_iso,
+			emissao_data,
+			estabelecimento_id,
 			total_itens,
 			valor_total,
 			valor_pago,
 			tributos,
 			consumidor_cpf,
 			consumidor_nome
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chave_acesso) DO UPDATE SET
+			emitente_nome = excluded.emitente_nome,
+			emitente_cnpj = excluded.emitente_cnpj,
+			emitente_endereco = excluded.emitente_endereco,
+			numero = excluded.numero,
+			serie = excluded.serie,
+			emissao_texto = excluded.emissao_texto,
+			emissao_iso = excluded.emissao_iso,
+			emissao_data = excluded.emissao_data,
+			estabelecimento_id = excluded.estabelecimento_id,
+			total_itens = excluded.total_itens,
+			valor_total = excluded.valor_total,
+			valor_pago = excluded.valor_pago,
+			tributos = excluded.tributos,
+			consumidor_cpf = excluded.consumidor_cpf,
+			consumidor_nome = excluded.consumidor_nome,
 			atualizado_em = now()
 		""",
 		[
@@ -721,7 +1339,9 @@ def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 			nota.numero,
 			nota.serie,
 			nota.emissao,
-			_converter_data_iso(nota.emissao),
+			emissao_iso,
+			emissao_data,
+			estabelecimento_id,
 			nota.total_itens,
 			_decimal_para_str(nota.valor_total),
 			_decimal_para_str(nota.valor_pago),
@@ -763,10 +1383,12 @@ def _persistir_itens(
 				produto_marca,
 				categoria_sugerida,
 				categoria_confirmada,
+				categoria_sugerida_id,
+				categoria_confirmada_id,
 				fonte_classificacao,
 				confianca_classificacao,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, now())
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, now())
 			""",
 			[
 				chave,
@@ -875,15 +1497,198 @@ def _registrar_embeddings_para_produto(produto: ProdutoPadronizado) -> None:
 	try:
 		from src.classifiers.embeddings import upsert_produto_embedding
 		upsert_produto_embedding(
-			produto_id=produto.id, # type: ignore
-			nome=produto.nome_base,
-			marca=produto.marca_base
+			produto_id=produto.id,  # type: ignore
+			descricao=produto.nome_base,
+			nome_base=produto.nome_base,
+			marca_base=produto.marca_base,
 		)
 	except ImportError:
 		pass
 	except Exception:
 		# Logar erro silenciosamente ou warning
 		pass
+
+
+def _converter_data_iso_e_data(texto: str | None) -> tuple[str | None, str | None]:
+	"""Retorna a representação ISO completa e a data (YYYY-MM-DD) extraída."""
+	iso = _converter_data_iso(texto)
+	if not iso:
+		return None, None
+	data_apenas = iso.split("T", 1)[0]
+	return iso, data_apenas
+
+
+def _garantir_dim_data(
+	con: duckdb.DuckDBPyConnection, data_iso: str | None
+) -> str | None:
+	"""Garante que a data informada exista em datas_referencia."""
+	if not data_iso:
+		return None
+	existe = con.execute(
+		"""
+		SELECT 1 FROM datas_referencia WHERE data_iso = ?
+		""",
+		[data_iso],
+	).fetchone()
+	if existe:
+		return data_iso
+	try:
+		data_ref = datetime.fromisoformat(data_iso).date()
+	except ValueError:
+		try:
+			data_ref = datetime.strptime(data_iso, "%Y-%m-%d").date()
+		except ValueError:
+			return None
+	ano_mes = f"{data_ref.year:04d}-{data_ref.month:02d}"
+	trimestre = (data_ref.month - 1) // 3 + 1
+	isocal = data_ref.isocalendar()
+	semana = isocal.week
+	nome_mes = _MESES_PT[data_ref.month - 1]
+	nome_dia = _DIAS_SEMANA_PT[data_ref.isoweekday() - 1]
+	con.execute(
+		"""
+		INSERT INTO datas_referencia (
+			data_iso,
+			ano,
+			mes,
+			dia,
+			ano_mes,
+			trimestre,
+			semana,
+			nome_mes,
+			nome_dia_semana
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		[
+			data_ref.isoformat(),
+			data_ref.year,
+			data_ref.month,
+			data_ref.day,
+			ano_mes,
+			trimestre,
+			semana,
+			nome_mes,
+			nome_dia,
+		],
+	)
+	return data_ref.isoformat()
+
+
+def _normalizar_cnpj(cnpj: str | None) -> str | None:
+	if not cnpj:
+		return None
+	digitos = re.sub(r"\D+", "", cnpj)
+	if len(digitos) != 14:
+		return None
+	return digitos
+
+
+def _obter_ou_criar_estabelecimento(
+	con: duckdb.DuckDBPyConnection,
+	nome: str | None,
+	cnpj: str | None,
+	endereco: str | None,
+) -> int | None:
+	"""Resolve o identificador de estabelecimento, criando se necessário."""
+	normalizado = _normalizar_cnpj(cnpj)
+	row = None
+	if normalizado:
+		row = con.execute(
+			"SELECT id FROM estabelecimentos WHERE cnpj_normalizado = ?",
+			[normalizado],
+		).fetchone()
+	if row:
+		est_id = int(row[0])
+		_consolidar_estabelecimento(con, est_id, nome, cnpj, normalizado, endereco)
+		return est_id
+	if nome:
+		row = con.execute(
+			"""
+			SELECT id FROM estabelecimentos
+			WHERE lower(COALESCE(nome,'')) = lower(COALESCE(?, ''))
+			AND lower(COALESCE(endereco,'')) = lower(COALESCE(?, ''))
+			LIMIT 1
+			""",
+			[nome, endereco],
+		).fetchone()
+		if row:
+			est_id = int(row[0])
+			_consolidar_estabelecimento(con, est_id, nome, cnpj, normalizado, endereco)
+			return est_id
+	if not nome and not normalizado and not endereco:
+		return None
+	resultado = con.execute(
+		"""
+		INSERT INTO estabelecimentos (nome, cnpj, cnpj_normalizado, endereco)
+		VALUES (?, ?, ?, ?)
+		RETURNING id
+		""",
+		[nome, cnpj, normalizado, endereco],
+	).fetchone()
+	return int(resultado[0]) if resultado else None
+
+
+def _consolidar_estabelecimento(
+	con: duckdb.DuckDBPyConnection,
+	est_id: int,
+	nome: str | None,
+	cnpj: str | None,
+	cnpj_normalizado: str | None,
+	endereco: str | None,
+) -> None:
+	con.execute(
+		"""
+		UPDATE estabelecimentos
+		SET
+			nome = COALESCE(?, nome),
+			cnpj = COALESCE(?, cnpj),
+			cnpj_normalizado = COALESCE(?, cnpj_normalizado),
+			endereco = COALESCE(?, endereco),
+			atualizado_em = CURRENT_TIMESTAMP
+		WHERE id = ?
+		""",
+		[nome, cnpj, cnpj_normalizado, endereco, est_id],
+	)
+
+
+def _resolver_categoria_id(
+	con: duckdb.DuckDBPyConnection, categoria_nome: str | None
+) -> int | None:
+	if not categoria_nome:
+		return None
+	nome = categoria_nome.strip()
+	if not nome:
+		return None
+	row = con.execute(
+		"""
+		SELECT id FROM categorias
+		WHERE lower(nome) = lower(?)
+		ORDER BY ativo DESC, id ASC
+		LIMIT 1
+		""",
+		[nome],
+	).fetchone()
+	if row:
+		return int(row[0])
+	try:
+		novo = con.execute(
+			"""
+			INSERT INTO categorias (grupo, nome)
+			VALUES (?, ?)
+			RETURNING id
+			""",
+			["Livres", nome],
+		).fetchone()
+		if novo:
+			return int(novo[0])
+	except duckdb.Error:
+		row = con.execute(
+			"SELECT id FROM categorias WHERE lower(nome) = lower(?) ORDER BY id DESC LIMIT 1",
+			[nome],
+		).fetchone()
+		if row:
+			return int(row[0])
+	return None
 
 
 def _converter_data_iso(texto: str | None) -> str | None:
@@ -949,20 +1754,21 @@ def obter_kpis_gerais(*, db_path: Path | str | None = None) -> dict[str, Any]:
 	"""Retorna KPIs gerais para o dashboard."""
 	with conexao(db_path) as con:
 		# Total de notas
-		total_notas = con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
+		total_notas_row = con.execute("SELECT COUNT(*) FROM notas").fetchone()
 		
 		# Total gasto (soma de valor_total das notas)
-		total_gasto = con.execute("SELECT SUM(valor_total) FROM notas").fetchone()[0]
+		total_gasto_row = con.execute("SELECT SUM(valor_total) FROM notas").fetchone()
 		
 		# Itens pendentes de classificação
-		itens_pendentes = con.execute(
+		itens_pendentes_row = con.execute(
 			"SELECT COUNT(*) FROM itens WHERE categoria_confirmada IS NULL"
-		).fetchone()[0]
+		).fetchone()
 
 	return {
-		"total_notas": total_notas or 0,
-		"total_gasto": _para_decimal(total_gasto) or Decimal("0.00"),
-		"itens_pendentes": itens_pendentes or 0,
+		"total_notas": (total_notas_row[0] if total_notas_row else 0) or 0,
+		"total_gasto": _para_decimal(total_gasto_row[0] if total_gasto_row else None)
+		or Decimal("0.00"),
+		"itens_pendentes": (itens_pendentes_row[0] if itens_pendentes_row else 0) or 0,
 	}
 
 
