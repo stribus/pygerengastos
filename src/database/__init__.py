@@ -183,6 +183,9 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)
 	""",
+)
+
+_VIEW_DEFINITIONS: tuple[str, ...] = (
 	"""
 	CREATE VIEW IF NOT EXISTS vw_itens_padronizados AS
 	SELECT
@@ -540,6 +543,8 @@ def _aplicar_schema(con: duckdb.DuckDBPyConnection) -> None:
 		con.execute(ddl)
 	for ddl in _SCHEMA_MIGRATIONS:
 		con.execute(ddl)
+	for ddl in _VIEW_DEFINITIONS:
+		con.execute(ddl)
 
 
 @contextmanager
@@ -576,6 +581,47 @@ def salvar_nota(nota: NotaFiscal, *, db_path: Path | str | None = None) -> None:
 			con.execute("COMMIT")
 		except Exception:
 			con.execute("ROLLBACK")
+			raise
+
+
+def remover_nota(chave_acesso: str, *, db_path: Path | str | None = None) -> bool:
+	"""Remove completamente uma nota e seus dados relacionados.
+	
+	Remove em cascata:
+	- Itens da nota
+	- Pagamentos da nota
+	- Classificações históricas
+	- Revisões manuais
+	- A nota em si
+	
+	Retorna True se a nota foi removida, False se não existia.
+	"""
+	with conexao(db_path) as con:
+		con.execute("BEGIN TRANSACTION")
+		try:
+			# Verifica se a nota existe
+			existe = con.execute(
+				"SELECT COUNT(*) FROM notas WHERE chave_acesso = ?",
+				[chave_acesso]
+			).fetchone()
+			
+			if not existe or existe[0] == 0:
+				con.execute("ROLLBACK")
+				return False
+			
+			# Remove dados relacionados (ordem importa por causa das FKs)
+			con.execute("DELETE FROM classificacoes_historico WHERE chave_acesso = ?", [chave_acesso])
+			con.execute("DELETE FROM revisoes_manuais WHERE chave_acesso = ?", [chave_acesso])
+			con.execute("DELETE FROM itens WHERE chave_acesso = ?", [chave_acesso])
+			con.execute("DELETE FROM pagamentos WHERE chave_acesso = ?", [chave_acesso])
+			con.execute("DELETE FROM notas WHERE chave_acesso = ?", [chave_acesso])
+			
+			con.execute("COMMIT")
+			logger.info("Nota %s removida com sucesso do banco de dados.", chave_acesso)
+			return True
+		except Exception as exc:
+			con.execute("ROLLBACK")
+			logger.exception("Erro ao remover nota %s: %s", chave_acesso, exc)
 			raise
 
 
@@ -1645,19 +1691,42 @@ def _consolidar_estabelecimento(
 	cnpj_normalizado: str | None,
 	endereco: str | None,
 ) -> None:
-	con.execute(
-		"""
-		UPDATE estabelecimentos
-		SET
-			nome = COALESCE(?, nome),
-			cnpj = COALESCE(?, cnpj),
-			cnpj_normalizado = COALESCE(?, cnpj_normalizado),
-			endereco = COALESCE(?, endereco),
-			atualizado_em = CURRENT_TIMESTAMP
-		WHERE id = ?
-		""",
-		[nome, cnpj, cnpj_normalizado, endereco, est_id],
-	)
+	"""Atualiza informações do estabelecimento apenas se campos estiverem NULL."""
+	# Busca os dados atuais do estabelecimento
+	row = con.execute(
+		"SELECT nome, cnpj, cnpj_normalizado, endereco FROM estabelecimentos WHERE id = ?",
+		[est_id]
+	).fetchone()
+	
+	if not row:
+		return
+	
+	nome_atual, cnpj_atual, cnpj_norm_atual, endereco_atual = row
+	
+	# Só atualiza campos que estão NULL/vazios no banco
+	campos: list[str] = []
+	parametros: list[object] = []
+	
+	if nome and not nome_atual:
+		campos.append("nome = ?")
+		parametros.append(nome)
+	if cnpj and not cnpj_atual:
+		campos.append("cnpj = ?")
+		parametros.append(cnpj)
+	if cnpj_normalizado and not cnpj_norm_atual:
+		campos.append("cnpj_normalizado = ?")
+		parametros.append(cnpj_normalizado)
+	if endereco and not endereco_atual:
+		campos.append("endereco = ?")
+		parametros.append(endereco)
+	
+	if not campos:
+		return
+	
+	set_clause = ", ".join(campos + ["atualizado_em = CURRENT_TIMESTAMP"])
+	parametros.append(est_id)
+	query = f"UPDATE estabelecimentos SET {set_clause} WHERE id = ?"
+	con.execute(query, parametros)
 
 
 def _resolver_categoria_id(

@@ -287,29 +287,74 @@ def _parse_consumidor(soup: BeautifulSoup) -> tuple[Optional[str], Optional[str]
 
 
 def _parse_itens(soup: BeautifulSoup) -> List[NotaItem]:
-    linhas = soup.select("table#tabResult tr[id^=Item]")
+    """Extrai itens da nota fiscal.
+    
+    Suporta múltiplos layouts de NFC-e:
+    1. Layout com divs/spans (txtTit, RCod, etc.)
+    2. Layout com tabela NFCCabecalho e TDs NFCDetalhe_Item
+    """
+    # Tenta primeiro o layout moderno com spans
+    linhas = soup.select("tr[id^=Item]")
+    if not linhas:
+        linhas = soup.select("div[id^=Item]")
+    
     itens: List[NotaItem] = []
+    
+    # Layout 1: spans com classes específicas (txtTit, RCod, etc.)
     for linha in linhas:
         descricao_tag = linha.select_one("span.txtTit")
-        if not descricao_tag:
-            continue
-        descricao = descricao_tag.get_text(strip=True)
-        codigo = _extract_codigo(linha.select_one("span.RCod"))
-        quantidade = _decimal_from_label(linha.select_one("span.Rqtd"), "Qtde.")
-        unidade = _extract_label(linha.select_one("span.RUN"), "UN") or ""
-        valor_unitario = _decimal_from_label(linha.select_one("span.RvlUnit"), "Vl. Unit.")
-        valor_total = _decimal_from_span(linha.select_one("span.valor"))
+        if descricao_tag:
+            descricao = descricao_tag.get_text(strip=True)
+            codigo = _extract_codigo(linha.select_one("span.RCod"))
+            quantidade = _decimal_from_label(linha.select_one("span.Rqtd"), "Qtde.")
+            unidade = _extract_label(linha.select_one("span.RUN"), "UN") or ""
+            valor_unitario = _decimal_from_label(linha.select_one("span.RvlUnit"), "Vl. Unit.")
+            valor_total = _decimal_from_span(linha.select_one("span.valor"))
 
-        itens.append(
-            NotaItem(
-                descricao=descricao,
-                codigo=codigo,
-                quantidade=quantidade,
-                unidade=unidade,
-                valor_unitario=valor_unitario,
-                valor_total=valor_total,
+            itens.append(
+                NotaItem(
+                    descricao=descricao,
+                    codigo=codigo,
+                    quantidade=quantidade,
+                    unidade=unidade,
+                    valor_unitario=valor_unitario,
+                    valor_total=valor_total,
+                )
             )
-        )
+    
+    # Se encontrou itens com o layout 1, retorna
+    if itens:
+        return itens
+    
+    # Layout 2: tabela com TDs classe NFCDetalhe_Item
+    # Estrutura: tr[id="Item + N"] > td (código, descrição, qtde, un, vl_unit, vl_total)
+    for linha in linhas:
+        tds = linha.select("td.NFCDetalhe_Item")
+        if len(tds) < 6:
+            continue
+        
+        try:
+            codigo = tds[0].get_text(strip=True) or None
+            descricao = tds[1].get_text(strip=True)
+            quantidade = _decimal_from_string(tds[2].get_text(strip=True))
+            unidade = tds[3].get_text(strip=True)
+            valor_unitario = _decimal_from_string(tds[4].get_text(strip=True))
+            valor_total = _decimal_from_string(tds[5].get_text(strip=True))
+            
+            itens.append(
+                NotaItem(
+                    descricao=descricao,
+                    codigo=codigo,
+                    quantidade=quantidade,
+                    unidade=unidade,
+                    valor_unitario=valor_unitario,
+                    valor_total=valor_total,
+                )
+            )
+        except (ValueError, InvalidOperation) as exc:
+            logger.warning(f"Erro ao parsear item da linha {linha.get('id')}: {exc}")
+            continue
+    
     return itens
 
 
