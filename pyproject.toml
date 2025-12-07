@@ -16,3 +16,8 @@ dependencies = [
     "sentence-transformers==5.1.2",
     "streamlit>=1.32",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::pydantic.PydanticDeprecatedSince20:litellm.*",
+]

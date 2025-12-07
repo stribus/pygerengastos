@@ -1,6 +1,6 @@
 # Sistema de gerenciamento de gastos mensais
 
-Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e) do portal da Receita Gaúcha, classifica itens automaticamente (Groq) e armazena tudo em DuckDB para visualização dos gastos.
+Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e) do portal da Receita Gaúcha, classifica itens automaticamente via LiteLLM/Gemini e armazena tudo em DuckDB para visualização dos gastos.
 
 ## Status atual
 
@@ -65,13 +65,13 @@ O DuckDB agora mantém dimensões explícitas para datas e estabelecimentos, al�
 
 A função `listar_itens_padronizados()` lê diretamente essa view, o que simplifica a montagem de dashboards mensais e relatórios por categoria.
 
-## Classificação com Groq
+## Classificação com LiteLLM (Gemini)
 
-Configure a variável `GROQ_API_KEY` no arquivo `.env` (ou diretamente no ambiente) para habilitar a integração. O módulo `src.classifiers.groq` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no DuckDB, chama a Groq e grava o histórico:
+Configure a variável `GEMINI_API_KEY` no arquivo `.env` (há fallback opcional para `GROQ_API_KEY` apenas para compatibilidade) para habilitar a integração. O módulo `src.classifiers.llm_classifier` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no DuckDB, chama o modelo `gemini/gemini-2.5-pro` via LiteLLM e grava o histórico:
 
-## Classificação semântica (Chroma + Groq fallback)
+## Classificação semântica (Chroma + fallback no LLM)
 
-Para acelerar a identificação de produtos, o sistema gera embeddings SentenceTransformers para cada descrição registrada e armazena-os no ChromaDB local (`data/chroma`). Quando um item novo chega, a busca semântica tenta encontrar um produto já existente com similaridade acima de 0.82. Se houver um match, reaproveitamos o `produto_id`, `nome_base` e `marca_base`. Caso contrário, a Groq continua sendo invocada para classificar o item e sugerir produto/categoria, e seus resultados enriquecem DuckDB e o índice de embeddings.
+Para acelerar a identificação de produtos, o sistema gera embeddings SentenceTransformers para cada descrição registrada e armazena-os no ChromaDB local (`data/chroma`). Quando um item novo chega, a busca semântica tenta encontrar um produto já existente com similaridade acima de 0.82. Se houver um match, reaproveitamos o `produto_id`, `nome_base` e `marca_base`. Caso contrário, o LLM (Gemini via LiteLLM) continua sendo invocado para classificar o item e sugerir produto/categoria, e seus resultados enriquecem DuckDB e o índice de embeddings.
 
 As dependências `chromadb==1.3.5` e `sentence-transformers==5.1.2` cuidam dessa camada. Garanta que o diretório `data/chroma` esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
 
@@ -129,7 +129,7 @@ Execute a suíte completa (scraper + DuckDB) para garantir que tudo esteja consi
 
 ## Próximos passos
 
-- Integrar a API da Groq para classificar itens inéditos e registrar histórico/correções manuais.
+- Evoluir a integração do LiteLLM/Gemini (monitor de custo, retries e estratégias de fallback adicionais) e registrar histórico/correções manuais.
 - Persistir notas, itens e categorias em DuckDB para consultas analíticas.
 - Construir dashboards Streamlit (lista de notas, filtros por período e gráficos mensais por categoria).
 

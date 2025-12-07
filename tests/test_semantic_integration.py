@@ -24,7 +24,7 @@ def test_classificacao_semantica_prioritaria():
          patch("src.classifiers.listar_categorias", return_value=[]), \
          patch("src.classifiers.obter_categoria_de_produto", return_value="alimentacao"), \
          patch("src.classifiers.buscar_produtos_semelhantes") as mock_busca, \
-         patch("src.classifiers.GroqClassifier") as MockGroq, \
+         patch("src.classifiers.LLMClassifier") as MockLLM, \
          patch("src.classifiers._salvar_resultados") as mock_salvar:
 
         # Caso 1: Match semântico encontrado (> 0.82)
@@ -37,8 +37,8 @@ def test_classificacao_semantica_prioritaria():
         
         classificar_itens_pendentes()
         
-        # Verifica se NÃO chamou o Groq
-        MockGroq.return_value.classificar_itens.assert_not_called()
+        # Verifica se NÃO chamou o LLM
+        MockLLM.return_value.classificar_itens.assert_not_called()
         
         # Verifica se salvou com origem chroma-cache
         args, _ = mock_salvar.call_args
@@ -47,7 +47,7 @@ def test_classificacao_semantica_prioritaria():
         assert resultados[0].origem == "chroma-cache"
         assert resultados[0].categoria == "alimentacao"
 
-def test_classificacao_fallback_groq():
+def test_classificacao_fallback_llm():
     # Mock dos itens pendentes
     mock_item = ItemParaClassificacao(
         chave_acesso="123",
@@ -67,14 +67,14 @@ def test_classificacao_fallback_groq():
     with patch("src.classifiers.listar_itens_para_classificacao", return_value=[mock_item]), \
          patch("src.classifiers.listar_categorias", return_value=[]), \
          patch("src.classifiers.buscar_produtos_semelhantes", return_value=[]), \
-         patch("src.classifiers.GroqClassifier") as MockGroq, \
+         patch("src.classifiers.LLMClassifier") as MockLLM, \
          patch("src.classifiers._salvar_resultados"):
 
-        # Configura retorno do Groq
-        mock_groq_instance = MockGroq.return_value
-        mock_groq_instance.classificar_itens.return_value = []
+        # Configura retorno do LLM
+        mock_llm_instance = MockLLM.return_value
+        mock_llm_instance.classificar_itens.return_value = []
 
         classificar_itens_pendentes()
         
-        # Verifica se CHAMOU o Groq
-        mock_groq_instance.classificar_itens.assert_called_once()
+        # Verifica se CHAMOU o LLM
+        mock_llm_instance.classificar_itens.assert_called_once()

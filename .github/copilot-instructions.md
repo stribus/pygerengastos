@@ -2,119 +2,191 @@
 
 ## Arquitetura do Projeto
 
-Este é um sistema de gerenciamento de despesas mensais em Python que:
-1. Extrai dados de notas fiscais do site da Receita Gaúcha (`https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx`)
-2. Classifica automaticamente os itens usando IA (Groq API)
-3. Armazena dados no DuckDB para análise
-4. Apresenta interface web com Streamlit
+Este é um sistema de gerenciamento de despesas mensais em Python que implementa um pipeline completo:
+1. **Web Scraping**: Extrai NFC-e do site da SEFAZ-RS via POST request com cabeçalhos específicos
+2. **Classificação Híbrida**: Usa busca semântica (ChromaDB + SentenceTransformers) com fallback para LLM (Gemini via LiteLLM)
+3. **Persistência**: DuckDB com schema dimensional (datas, estabelecimentos, produtos, categorias)
+4. **Interface**: Streamlit com 3 abas (Home/Importação/Análise) e navegação com redirecionamento
 
 ## Stack Tecnológico
 
-- **Frontend**: Streamlit (interface web)
+- **Frontend**: Streamlit com `st.session_state` para navegação e cache
 - **Backend**: Python 3.13.1
-- **IA/ML**: Groq API para classificação de itens
-- **Banco de Dados**: DuckDB
-- **Web Scraping**: Para extração de dados da Receita Gaúcha
-- **Ambiente**: Virtual environment com `uv` (Python package manager)(`uv pip`, `uv venv`,`uv run`,`uv add`, etc.)
-- **ambeiente virtual**: `.venv`, verifique sempre estar com o ambiente ativo, use `.\.venv\Scripts\Activate.ps1` no powershell
+- **IA/ML**: 
+  - Busca semântica: ChromaDB 1.3.5 + SentenceTransformers 5.1.2 (modelo `all-MiniLM-L6-v2`)
+  - LLM: LiteLLM apontando para `gemini/gemini-2.5-flash-lite` (não `3-pro-preview`)
+- **Banco de Dados**: DuckDB com schema normalizado e views agregadas
+- **Web Scraping**: httpx + BeautifulSoup4
+- **Ambiente**: `uv` como gerenciador de pacotes (use `uv pip`, `uv add`, nunca `pip install` direto)
+- **Logging**: Sistema centralizado via `src/logger.py` com RotatingFileHandler em `logs/app.log`
 
-## Estrutura de Interfaces Planejadas
+## Fluxo de Classificação Híbrida (CRÍTICO)
 
-### 1. Interface de Importação
-- Input para chave de acesso da nota fiscal
-- Validação e busca automática no site da Receita Gaúcha
-- Processamento e armazenamento dos dados
+O sistema usa **classificação semântica prioritária** com fallback para LLM:
 
-### 2. Interface de Visualização
-- Lista de notas fiscais importadas
-- Detalhamento dos itens por nota
-- Status de classificação dos produtos
+1. **Busca Semântica (ChromaDB)**: Para cada item, busca produtos similares por embedding
+   - Se `score >= 0.82`: reutiliza `produto_id`, `categoria`, `nome_base`, `marca_base` (origem: `chroma-cache`)
+   - Embeddings gerados com `all-MiniLM-L6-v2` e armazenados em `data/chroma/`
+   
+2. **Fallback LLM (Gemini)**: Apenas para itens sem match semântico
+   - Modelo: `gemini/gemini-2.5-flash-lite` via LiteLLM
+   - Retorna: categoria + confiança + produto_nome + produto_marca + justificativa
+   - Origem: `gemini-litellm`
 
-### 3. Interface de Relatórios
-- Gráficos mensais de gastos
-- Análise de custos por categoria de itens
-- Dashboards interativos com Streamlit
+3. **Persistência Automática**: Ambos os fluxos atualizam DuckDB e registram embeddings via `_registrar_alias_produto()`
+
+**Exemplo de implementação**: Ver `src/classifiers/__init__.py::classificar_itens_pendentes()` e testes em `tests/test_semantic_integration.py`
 
 ## Convenções Específicas do Projeto
 
 ### Nomenclatura
-- Use português brasileiro para nomes de variáveis e funções relacionadas ao domínio
-- Mantenha comentários e documentação em português
-- Exemplos: `classificar_item()`, `nota_fiscal`, `categoria_produto`
+- **Domínio**: Português BR (`salvar_nota()`, `categoria_confirmada`, `emitente_nome`)
+- **Técnico**: Inglês OK para padrões Python (`logger`, `dataclass`, `db_path`)
+- **Documentação**: Sempre em português
 
-### Integração com Receita Gaúcha
-- A consulta deve enviar um POST para `https://www.sefaz.rs.gov.br/ASP/AAE_ROOT/NFE/SAT-WEB-NFE-NFC_2.asp` com `HML=false`, `chaveNFe=<44 dígitos>` e `Action=Avançar`, usando como *referer* `.../SAT-WEB-NFE-NFC_1.asp?chaveNFe=<44 dígitos>`.
-- Simule os cabeçalhos de um navegador moderno (User-Agent, Accept, Accept-Language, Origin, Cache-Control, etc.) para evitar bloqueios.
-- Salve o HTML retornado em `data/raw_nfce/nfce_<chave>.html` para facilitar depuração.
-- Implemente tratamento robusto de erros para web scraping e considere rate limiting para evitar bloqueios.
+### Integração com SEFAZ-RS (src/scrapers/receita_rs.py)
+```python
+# POST para endpoint oficial com cabeçalhos simulando navegador
+NFCE_POST_URL = "https://www.sefaz.rs.gov.br/ASP/AAE_ROOT/NFE/SAT-WEB-NFE-NFC_2.asp"
+# Payload: HML=false, chaveNFe=<44 dígitos>, Action=Avançar
+# Referer: .../SAT-WEB-NFE-NFC_1.asp?chaveNFe=<chave>
+# Salva HTML em: data/raw_nfce/nfce_<chave>.html
+```
 
-### Classificação com IA
-- Use Groq API para classificar itens nunca processados
-- Armazene classificações para evitar reprocessamento
-- Implemente fallback para classificação manual
+### Logging Padronizado
+```python
+from src.logger import setup_logging
+logger = setup_logging(__name__)  # Usa nome do módulo
+# Logs vão para logs/app.log (rotating 5MB, 3 backups) + console
+```
 
 ## Ambiente de Desenvolvimento
 
-### Setup Inicial
-```bash
+### Setup Inicial (Windows PowerShell)
+```powershell
 # Ativar ambiente virtual
 .\.venv\Scripts\Activate.ps1
 
-# Instalar dependências
-uv pip install -r requirements.txt
+# Instalar dependências (SEMPRE use uv)
+uv sync  # Ou: uv pip install -r requirements.txt
 
-# OU instalar pacotes individuais
-uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
-```
+# Rodar aplicação
+streamlit run main.py
 
-### ⚠️ IMPORTANTE: Gerenciamento de Pacotes
-- **SEMPRE use `uv pip install`** ao invés de `pip install`
-- **SEMPRE use `uv pip`** para todas as operações de pacotes
-- O projeto usa `uv` como gerenciador de pacotes Python
-- Comando para rodar testes: `.\.venv\Scripts\Activate.ps1; pytest`
-
-### Estrutura de Arquivos Sugerida
-```
-├── main.py                 # Ponto de entrada Streamlit
-├── src/
-│   ├── scrapers/           # Módulos para extração de dados
-│   ├── classifiers/        # Integração com Groq API
-│   ├── database/           # Operações DuckDB
-│   └── ui/                 # Componentes Streamlit
-├── data/                   # Banco DuckDB e arquivos temporários
-└── tests/                  # Testes unitários
-```
-
-### Comandos Essenciais
-```bash
 # Rodar testes
-.\.venv\Scripts\Activate.ps1; pytest
-
-# Executar aplicação Streamlit
-.\.venv\Scripts\Activate.ps1; streamlit run main.py
-
-# Desenvolvimento com auto-reload
-.\.venv\Scripts\Activate.ps1; streamlit run main.py --server.runOnSave true
-
-# Instalar nova dependência
-.\.venv\Scripts\Activate.ps1; uv pip install <pacote>
+pytest  # Filtra warnings do pydantic/litellm via pyproject.toml
 ```
 
-## Padrões de Dados
+### ⚠️ CRÍTICO: Gerenciamento de Pacotes
+- **NUNCA** use `pip install` diretamente
+- **SEMPRE** use `uv add <pacote>` para adicionar dependências
+- O `uv` atualiza automaticamente `pyproject.toml` e `uv.lock`
 
-### Nota Fiscal
-- Chave de acesso: 44 dígitos numéricos
-- Dados essenciais: data, estabelecimento, valor total, itens
-- Armazenar dados brutos e normalizados separadamente
+### Estrutura Real do Projeto
+```
+├── main.py                      # Entry point Streamlit com navegação via session_state
+├── src/
+│   ├── logger.py                # Logging centralizado (RotatingFileHandler)
+│   ├── scrapers/
+│   │   └── receita_rs.py        # Scraper SEFAZ-RS + dataclasses (NotaFiscal, NotaItem)
+│   ├── classifiers/
+│   │   ├── __init__.py          # classificar_itens_pendentes() - orquestra semântica + LLM
+│   │   ├── embeddings.py        # ChromaDB: upsert_produto_embedding(), buscar_produtos_semelhantes()
+│   │   └── llm_classifier.py    # LLMClassifier - wrapper LiteLLM/Gemini
+│   ├── database/
+│   │   └── __init__.py          # DuckDB: salvar_nota(), registrar_classificacao_itens(), views
+│   └── ui/
+│       ├── home.py              # Dashboard com KPIs e gráficos mensais
+│       ├── importacao.py        # Input chave NFC-e + classificação automática
+│       └── analise.py           # Edição de categoria/produto + histórico de revisões
+├── data/
+│   ├── gastos.duckdb            # Banco principal
+│   ├── categorias.csv           # Seed de categorias (carregado via seed_categorias_csv())
+│   ├── chroma/                  # Índice de embeddings
+│   └── raw_nfce/                # HTMLs brutos das notas (debug)
+├── tests/                       # Testes com pytest + fixtures públicas
+├── build.ps1                    # Script de build para distribuição
+└── pyproject.toml               # Config uv + pytest (filtra warnings)
+```
 
-### Classificação de Itens
-- Categorias sugeridas: alimentação, limpeza, higiene, etc.
-- Manter histórico de classificações para aprendizado
-- Implementar validação manual para correções
+## Schema DuckDB (Dimensional)
+
+### Tabelas Principais
+- `notas`: Cabeçalho da NFC-e (chave_acesso PK, estabelecimento_id FK, emissao_data)
+- `itens`: Produtos da nota (chave_acesso + sequencia PK, produto_id FK, categoria_sugerida, categoria_confirmada)
+- `produtos`: Entidade canônica (id PK, nome_base, marca_base, categoria_id FK)
+- `aliases_produtos`: Mapeia descrições originais → produto_id (texto_original UNIQUE)
+- `categorias`: Lista de categorias (id PK, grupo, nome)
+- `estabelecimentos`: Emitentes normalizados (cnpj_normalizado UNIQUE)
+- `datas_referencia`: Dimensão temporal (data_iso PK, ano_mes, nome_mes PT-BR)
+
+### Tabelas de Auditoria
+- `classificacoes_historico`: Log de todas as classificações (chroma-cache, gemini-litellm, revisao-manual)
+- `revisoes_manuais`: Ajustes feitos por usuários (usuario, observacoes, confirmado)
+
+### Views
+- `vw_itens_padronizados`: Join completo com datas + estabelecimentos + categorias (usada pelos dashboards)
+
+## Padrões de Implementação
+
+### Transações DuckDB
+```python
+from src.database import conexao, salvar_nota
+
+# SEMPRE use context manager
+with conexao() as con:
+    con.execute("BEGIN TRANSACTION")
+    try:
+        # operações...
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+```
+
+### Navegação Streamlit
+```python
+# Redirecionar entre abas
+st.session_state["redirecionar_menu"] = "Analisar notas"
+st.rerun()
+
+# Passar dados entre telas
+st.session_state["nota_em_revisao"] = chave_acesso
+```
+
+### Classificação Manual vs Automática
+```python
+# Sugestão (categoria_sugerida):
+classificar_itens_pendentes(confirmar=False)
+
+# Confirmação (categoria_confirmada + produto_id):
+registrar_revisoes_manuais([...], confirmar=True, usuario="João")
+```
+
+## Comandos de Build/Distribuição
+
+```powershell
+# Build completo com venv empacotada
+.\build.ps1 -PackageName pygerengastos
+
+# Build sem compactar
+.\build.ps1 -SkipZip
+
+# Build com dados brutos (para debug)
+.\build.ps1 -IncludeRawData
+```
 
 ## Considerações de Performance
 
-- Use DuckDB para consultas analíticas rápidas
-- Cache classificações de IA para evitar custos desnecessários  
-- Implemente paginação para listas de notas fiscais
-- Otimize queries com índices apropriados no DuckDB
+- **ChromaDB**: Índice regenerado automaticamente em `upsert_produto_embedding()` após cada classificação
+- **DuckDB**: Queries rápidas via views materializadas (`vw_itens_padronizados`)
+- **LLM**: Apenas chamado para itens sem match semântico (economia de tokens/custo)
+- **HTML Cache**: `data/raw_nfce/` facilita re-parsing sem re-scraping
+
+## Debugging/Troubleshooting
+
+- **Logs**: Sempre consulte `logs/app.log` primeiro
+- **Embeddings**: Se busca semântica falha, delete `data/chroma/` e reimporte notas
+- **LLM**: Verifique `GEMINI_API_KEY` no `.env` (carregado via `python-dotenv`)
+- **Testes**: Fixture pública em `.github/xmlexemplo.xml` garante testes determinísticos
+- **Debug de produtos**: Use `debug_product_update.py` para inspecionar `produto_id` e aliases

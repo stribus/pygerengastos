@@ -120,7 +120,7 @@ def render_pagina_importacao() -> None:
 			executar_classificacao = st.checkbox(
 				"Classificar itens automaticamente",
 				value=False,
-				help="Enfileira itens recém-importados para a Groq",
+				help="Enfileira itens recém-importados para classificação via LLM",
 			)
 		submetido = st.form_submit_button("Importar nota")
 

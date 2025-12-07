@@ -2,7 +2,7 @@
 
 ## Objetivo geral
 
-- Construir o sistema completo de importação, classificação (usando Groq) e visualização das notas fiscais.
+- Construir o sistema completo de importação, classificação (usando LiteLLM + Gemini) e visualização das notas fiscais.
 - Garantir que os dados fiquem armazenados em DuckDB e que a interface Streamlit permita monitoramento dos gastos mensais.
 
 ## Status atual
@@ -18,9 +18,9 @@
   - [x] Reimplementar a busca usando POST no endpoint `SAT-WEB-NFE-NFC_2.asp`, simulando os cabeçalhos do navegador e salvando o HTML em `data/raw_nfce`.
   - [x] Cobrir parsing com testes automatizados e fixture pública.
 - [x] **Classificação de itens**
-  - [x] Detectar itens inéditos e solicitar classificação à API da Groq com cache local (`classificar_itens_pendentes`).
-  - [x] Integrar busca semântica (Chroma) para evitar chamadas desnecessárias à Groq.
-  - [x] Documentar o fluxo semântico Chroma + Groq no README.md.
+  - [x] Detectar itens inéditos e solicitar classificação via LiteLLM/Gemini com cache local (`classificar_itens_pendentes`).
+  - [x] Integrar busca semântica (Chroma) para evitar chamadas desnecessárias ao LLM.
+  - [x] Documentar o fluxo semântico Chroma + LiteLLM no README.md.
   - [x] Identificar produto (nome base + marca) junto com a categoria para permitir agrupamentos.
   - [x] Expor mecanismo de revisão manual para ajustes (UI/backend ainda inexistentes — apenas flag `confirmar` via backend).
   - [x] Construir tela Streamlit para listar itens pendentes, permitir edição de categoria/produto e confirmar ajustes.

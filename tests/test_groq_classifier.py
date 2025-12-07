@@ -7,15 +7,15 @@ from unittest.mock import patch
 import json
 import os
 
-import httpx
 import pytest
+from litellm.exceptions import RateLimitError
 
 from src.classifiers import ClassificacaoResultado, classificar_itens_pendentes
-from src.classifiers.groq import GroqClassifier
+from src.classifiers.llm_classifier import LLMClassifier
 from src.database import ItemParaClassificacao, salvar_nota
 from src.scrapers import receita_rs
 
-# Carregar .env logo no início para garantir que GROQ_API_KEY esteja disponível
+# Carregar .env logo no início para garantir que GEMINI_API_KEY esteja disponível
 try:
 	import dotenv
 	_env_path = Path(__file__).resolve().parents[1] / ".env"
@@ -70,11 +70,16 @@ def test_groq_classifier_interpreta_json_e_retorna_resultados():
 			}
 		]
 	}
-	transport = httpx.MockTransport(lambda request: httpx.Response(200, json=conteudo))
-	client = httpx.Client(transport=transport)
-	classifier = GroqClassifier(api_key="teste", client=client)
-	itens = [_item_para_classificacao()]
-	resultados = classifier.classificar_itens(itens)
+
+	class FakeResponse:
+		def model_dump(self):
+			return conteudo
+
+	with patch("src.classifiers.llm_classifier.completion", return_value=FakeResponse()) as mock_completion:
+		classifier = LLMClassifier(api_key="teste")
+		itens = [_item_para_classificacao()]
+		resultados = classifier.classificar_itens(itens)
+		mock_completion.assert_called_once()
 
 	assert len(resultados) == 1
 	resultado = resultados[0]
@@ -84,14 +89,13 @@ def test_groq_classifier_interpreta_json_e_retorna_resultados():
 	assert resultado.produto_marca == "Tio João"
 	assert resultado.modelo == classifier.model
 	assert resultado.resposta_json is not None
-	client.close()
 
 
 def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 	nota = receita_rs.parse_nota(FIXTURE_HTML.read_text(encoding="utf-8"), FIXTURE_CHAVE)
 	_salvar_para_tmp(tmp_path, nota)
 
-	class FakeGroq(GroqClassifier):  # type: ignore[misc]
+	class FakeGroq(LLMClassifier):  # type: ignore[misc]
 		def __init__(self):  # pylint: disable=super-init-not-called
 			self.chamadas = 0
 			self.model = "fake"
@@ -104,7 +108,6 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 					sequencia=item.sequencia,
 					categoria="alimentacao",
 					confianca=0.7,
-					origem="groq",
 					modelo="fake",
 					observacoes="teste",
 					resposta_json="{}",
@@ -114,7 +117,7 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 
 	classificador = FakeGroq()
 	resultados = classificar_itens_pendentes(
-		classifier=cast(GroqClassifier, classificador),
+		classifier=cast(LLMClassifier, classificador),
 		db_path=tmp_path / "tmp.duckdb",
 		limit=2,
 		confirmar=True,
@@ -139,11 +142,11 @@ def _salvar_para_tmp(tmp_path, nota):
 
 
 @pytest.mark.skipif(
-	not os.getenv("GROQ_API_KEY"),
-	reason="GROQ_API_KEY não configurada - teste de integração ignorado"
+	not os.getenv("GEMINI_API_KEY"),
+	reason="GEMINI_API_KEY não configurada - teste de integração ignorado"
 )
 def test_groq_api_real_classifica_itens_e_retorna_json_valido():
-	"""Teste de integração real com API Groq.
+	"""Teste de integração real com modelo Gemini via LiteLLM.
 	
 	Valida que:
 	1. A API responde com sucesso
@@ -151,7 +154,7 @@ def test_groq_api_real_classifica_itens_e_retorna_json_valido():
 	3. As categorias são extraídas corretamente
 	4. A confiança está no formato esperado (0.0 a 1.0)
 	"""
-	classifier = GroqClassifier(model="llama-3.1-8b-instant", temperature=0.1)
+	classifier = LLMClassifier(model="gemini/gemini-2.5-pro", temperature=0.1)
 	
 	# Criar itens de teste com características distintas para classificação
 	itens = [
@@ -200,7 +203,10 @@ def test_groq_api_real_classifica_itens_e_retorna_json_valido():
 	]
 	
 	# Executar classificação
-	resultados = classifier.classificar_itens(itens)
+	try:
+		resultados = classifier.classificar_itens(itens)
+	except RateLimitError as err:
+		pytest.skip(f"Teste ignorado por limite de cota do Gemini: {err}")
 	
 	# Validações básicas
 	assert resultados, "A API deve retornar resultados"
@@ -212,7 +218,7 @@ def test_groq_api_real_classifica_itens_e_retorna_json_valido():
 		assert resultado.chave_acesso, "chave_acesso não pode ser vazia"
 		assert resultado.sequencia > 0, "sequencia deve ser positiva"
 		assert resultado.categoria, "categoria não pode ser vazia"
-		assert resultado.origem == "groq", "origem deve ser 'groq'"
+		assert resultado.origem == "gemini-litellm", "origem deve ser 'gemini-litellm'"
 		assert resultado.modelo, "modelo deve estar preenchido"
 		
 		# Validar confiança (se presente)

@@ -183,7 +183,7 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
                 "sequencia": 1,
                 "categoria": "alimentacao",
                 "confianca": 0.93,
-                "origem": "groq",
+                "origem": "gemini-litellm",
                 "modelo": "teste",
                 "observacoes": "classificação automática",
                 "resposta_json": "{}",
@@ -216,7 +216,7 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
     assert item_row is not None
     assert item_row[0] == "alimentacao"
     assert item_row[1] == "alimentacao"
-    assert item_row[2] == "groq"
+    assert item_row[2] == "gemini-litellm"
     assert pytest.approx(float(item_row[3]), rel=1e-3) == 0.93
     assert item_row[4] is not None
     assert item_row[5] == "Arroz Integral"

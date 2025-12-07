@@ -4,13 +4,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from importlib import import_module
-from typing import Callable, Iterable, Sequence, cast
+from typing import Any, Callable, Iterable, Sequence, cast
 import json
 import logging
 import os
 import textwrap
 
-import httpx
+from litellm import completion
 
 from src.database import ItemParaClassificacao
 from src.logger import setup_logging
@@ -18,15 +18,13 @@ from src.logger import setup_logging
 logger = setup_logging(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
-#DEFAULT_MODEL = "llama-3.1-8b-instant"
-DEFAULT_MODEL = "openai/gpt-oss-20b"
+DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 DEFAULT_MAX_TOKENS = 8000
 _ENV_LOADED = False
 
 
 @dataclass(frozen=True)
-class _RespostaGroq:
+class _RespostaLLM:
 	categoria: str
 	confianca: float | None = None
 	justificativa: str | None = None
@@ -62,7 +60,7 @@ class ClassificacaoResultado:
 	sequencia: int
 	categoria: str
 	confianca: float | None = None
-	origem: str = "groq"
+	origem: str = "gemini-litellm"
 	modelo: str | None = None
 	observacoes: str | None = None
 	resposta_json: str | None = None
@@ -70,8 +68,8 @@ class ClassificacaoResultado:
 	produto_marca: str | None = None
 
 
-class GroqClassifier:
-	"""Cliente simples para a API da Groq focado em classificação de itens."""
+class LLMClassifier:
+	"""Cliente LiteLLM para classificar itens via modelos Gemini."""
 
 	def __init__(
 		self,
@@ -80,18 +78,16 @@ class GroqClassifier:
 		model: str = DEFAULT_MODEL,
 		temperature: float = 0.1,
 		max_tokens: int = DEFAULT_MAX_TOKENS,
-		client: httpx.Client | None = None,
 		timeout: float = 30.0,
 		categorias: Sequence[str] | None = None,
 	):
 		self._ensure_env()
-		self.api_key = api_key or os.getenv("GROQ_API_KEY")
+		self.api_key = api_key or os.getenv("GEMINI_API_KEY") 
 		if not self.api_key:
-			raise RuntimeError("Configure a variável GROQ_API_KEY no ambiente ou arquivo .env")
+			raise RuntimeError("Configure a variável GEMINI_API_KEY no ambiente ou arquivo .env")
 		self.model = model or DEFAULT_MODEL
 		self.temperature = temperature
 		self.max_tokens = max_tokens
-		self._client = client
 		self._timeout = timeout
 		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
 
@@ -125,7 +121,6 @@ class GroqClassifier:
 					sequencia=item.sequencia,
 					categoria=categoria,
 					confianca=resposta.confianca,
-					origem="groq",
 					modelo=self.model,
 					observacoes=resposta.justificativa,
 					resposta_json=resposta_json,
@@ -135,28 +130,23 @@ class GroqClassifier:
 			)
 		return resultados
 
-	def _executar_chamada(self, payload: dict[str, object]) -> tuple[str, dict[str, object]]:
-		headers = {
-			"Authorization": f"Bearer {self.api_key}",
-			"Content-Type": "application/json",
-		}
-		client = self._client or httpx.Client(timeout=self._timeout)
-		close_client = self._client is None
-		logger.debug("Enviando payload para Groq: %s", json.dumps(payload, ensure_ascii=False))
+	def _executar_chamada(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+		logger.debug("Enviando payload para LiteLLM/Gemini: %s", json.dumps(payload, ensure_ascii=False))
 		try:
-			response = client.post(
-				GROQ_CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=self._timeout
+			response_obj = completion(
+				request_timeout=self._timeout,
+				api_key=self.api_key,
+				**cast(dict[str, Any], payload),
 			)
-			response.raise_for_status()
-			json_data: dict[str, object] = response.json()
-			logger.debug("Resposta da Groq: %s", response.text)
-			conteudo = _extrair_conteudo(json_data)
-			return conteudo, json_data
-		finally:
-			if close_client:
-				client.close()
+		except Exception as exc:  # pragma: no cover - erro propagado para fluxo geral
+			logger.exception("Erro ao chamar LiteLLM/Gemini: %s", exc)
+			raise
+		json_data = _normalizar_resposta(response_obj)
+		logger.debug("Resposta do LiteLLM/Gemini: %s", json.dumps(json_data, ensure_ascii=False))
+		conteudo = _extrair_conteudo(json_data)
+		return conteudo, json_data
 
-	def _montar_payload(self, itens: Sequence[ItemParaClassificacao]) -> dict[str, object]:
+	def _montar_payload(self, itens: Sequence[ItemParaClassificacao]) -> dict[str, Any]:
 		contexto_estabelecimento = itens[0].emitente_nome or "Estabelecimento desconhecido"
 		contexto_data = itens[0].emissao_iso or "Data não informada"
 		linhas: list[str] = []
@@ -210,13 +200,13 @@ class GroqClassifier:
 			],
 		}
 
-	def _interpretar_resposta(self, conteudo: str) -> dict[int, _RespostaGroq]:
+	def _interpretar_resposta(self, conteudo: str) -> dict[int, _RespostaLLM]:
 		if not conteudo:
 			return {}
 		try:
 			dados = json.loads(_extrair_json_text(conteudo))
 		except json.JSONDecodeError as e:
-			logger.error("Resposta da Groq não pôde ser decodificada como JSON: \n %s \n\n erro: %s", conteudo, str(e))
+			logger.error("Resposta do LLM não pôde ser decodificada como JSON: \n %s \n\n erro: %s", conteudo, str(e))
 			return {}
 
 		itens_dados: Iterable[dict[str, object]]
@@ -227,7 +217,7 @@ class GroqClassifier:
 		else:
 			return {}
 
-		mapeamento: dict[int, _RespostaGroq] = {}
+		mapeamento: dict[int, _RespostaLLM] = {}
 		for entrada in itens_dados:
 			if not isinstance(entrada, dict):
 				continue
@@ -250,7 +240,7 @@ class GroqClassifier:
 				produto_nome = entrada.get("produto_nome")
 				produto_marca = entrada.get("produto_marca")
 
-			mapeamento[sequencia_int] = _RespostaGroq(
+			mapeamento[sequencia_int] = _RespostaLLM(
 				categoria=str(categoria),
 				confianca=_normalizar_conf(entrada.get("confianca")),
 				justificativa=cast(str | None, entrada.get("justificativa") or entrada.get("motivo")),
@@ -273,7 +263,7 @@ class GroqClassifier:
 		_ENV_LOADED = True
 
 
-def _extrair_conteudo(resposta: dict[str, object]) -> str:
+def _extrair_conteudo(resposta: dict[str, Any]) -> str:
 	choices = resposta.get("choices")
 	if not isinstance(choices, list) or not choices:
 		return ""
@@ -285,6 +275,18 @@ def _extrair_conteudo(resposta: dict[str, object]) -> str:
 		if isinstance(conteudo, str):
 			return conteudo.strip()
 	return ""
+
+
+def _normalizar_resposta(resposta: object) -> dict[str, Any]:
+	if isinstance(resposta, dict):
+		return resposta
+	if hasattr(resposta, "model_dump") and callable(getattr(resposta, "model_dump")):
+		return cast(dict[str, Any], resposta.model_dump())  # type: ignore[no-any-return]
+	if hasattr(resposta, "dict") and callable(getattr(resposta, "dict")):
+		return cast(dict[str, Any], resposta.dict())  # type: ignore[no-any-return]
+	if hasattr(resposta, "__dict__"):
+		return cast(dict[str, Any], vars(resposta))
+	raise TypeError("Resposta inesperada retornada pelo LiteLLM")
 
 
 def _extrair_json_text(conteudo: str) -> str:

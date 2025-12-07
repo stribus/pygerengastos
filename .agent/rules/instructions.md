@@ -8,7 +8,7 @@ trigger: always_on
 
 Este é um sistema de gerenciamento de despesas mensais em Python que:
 1. Extrai dados de notas fiscais do site da Receita Gaúcha (`https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx`)
-2. Classifica automaticamente os itens usando IA (Groq API)
+2. Classifica automaticamente os itens usando IA via LiteLLM (modelos Gemini)
 3. Armazena dados no DuckDB para análise
 4. Apresenta interface web com Streamlit
 
@@ -16,7 +16,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 
 - **Frontend**: Streamlit (interface web)
 - **Backend**: Python 3.13.1
-- **IA/ML**: Groq API para classificação de itens
+- **IA/ML**: LiteLLM com modelos Gemini (`gemini/gemini-2.5-pro`) para classificação de itens
 - **Banco de Dados**: DuckDB
 - **Web Scraping**: Para extração de dados da Receita Gaúcha
 - **Ambiente**: Virtual environment com `uv` (Python package manager)(`uv pip`, `uv venv`,`uv run`,`uv add`, etc.)
@@ -53,7 +53,8 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 - Implemente tratamento robusto de erros para web scraping e considere rate limiting para evitar bloqueios.
 
 ### Classificação com IA
-- Use Groq API para classificar itens nunca processados
+- Use LiteLLM apontando para `gemini/gemini-2.5-pro` para classificar itens nunca processados
+- Configure `GEMINI_API_KEY` no `.env` (fallback opcional para `GROQ_API_KEY` apenas para compatibilidade)
 - Armazene classificações para evitar reprocessamento
 - Implemente fallback para classificação manual
 
@@ -82,7 +83,7 @@ uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
 ├── main.py                 # Ponto de entrada Streamlit
 ├── src/
 │   ├── scrapers/           # Módulos para extração de dados
-│   ├── classifiers/        # Integração com Groq API
+│   ├── classifiers/        # Integração com LiteLLM + Gemini
 │   ├── database/           # Operações DuckDB
 │   └── ui/                 # Componentes Streamlit
 ├── data/                   # Banco DuckDB e arquivos temporários
