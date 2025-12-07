@@ -6,16 +6,22 @@ from pathlib import Path
 from importlib import import_module
 from typing import Callable, Iterable, Sequence, cast
 import json
+import logging
 import os
 import textwrap
 
 import httpx
 
 from src.database import ItemParaClassificacao
+from src.logger import setup_logging
+
+logger = setup_logging(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+#DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
+DEFAULT_MAX_TOKENS = 8000
 _ENV_LOADED = False
 
 
@@ -73,7 +79,7 @@ class GroqClassifier:
 		api_key: str | None = None,
 		model: str = DEFAULT_MODEL,
 		temperature: float = 0.1,
-		max_tokens: int = 400,
+		max_tokens: int = DEFAULT_MAX_TOKENS,
 		client: httpx.Client | None = None,
 		timeout: float = 30.0,
 		categorias: Sequence[str] | None = None,
@@ -136,12 +142,14 @@ class GroqClassifier:
 		}
 		client = self._client or httpx.Client(timeout=self._timeout)
 		close_client = self._client is None
+		logger.debug("Enviando payload para Groq: %s", json.dumps(payload, ensure_ascii=False))
 		try:
 			response = client.post(
 				GROQ_CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=self._timeout
 			)
 			response.raise_for_status()
 			json_data: dict[str, object] = response.json()
+			logger.debug("Resposta da Groq: %s", response.text)
 			conteudo = _extrair_conteudo(json_data)
 			return conteudo, json_data
 		finally:
@@ -153,44 +161,38 @@ class GroqClassifier:
 		contexto_data = itens[0].emissao_iso or "Data não informada"
 		linhas: list[str] = []
 		for item in itens:
-			valor = _formatar_decimal(item.valor_total)
+			#valor = _formatar_decimal(item.valor_total)
 			quantidade = _formatar_decimal(item.quantidade)
 			unidade = item.unidade or ""
 			linhas.append(
-				f"#{item.sequencia} — {item.descricao} | quantidade: {quantidade} {unidade} | valor total: R$ {valor}"
+				f"#{item.sequencia} — {item.descricao} | quantidade: {quantidade} {unidade} "
 			)
 		linhas_formatadas = "\n".join(f"- {linha}" for linha in linhas)
 		categorias_texto = ""
 		if self.categorias_disponiveis:
 			categorias_unicas = ", ".join(sorted(set(self.categorias_disponiveis)))
-			categorias_texto = f"Categorias esperadas: {categorias_unicas}.\n\n"
+			categorias_texto = f"Categorias disponíveis: {categorias_unicas}.\n"
 
 		prompt = textwrap.dedent(
 			f"""
-				Você é um especialista em finanças pessoais. Classifique cada item listado abaixo em
-				categorias de orçamento como alimentação, limpeza, higiene, farmácia, petshop,
-				serviços ou "outros". Observe o estabelecimento {contexto_estabelecimento}
-				e a data {contexto_data}.
+				Você classifica itens de notas fiscais em categorias de orçamento doméstico.
+				Estabelecimento: {contexto_estabelecimento} | Data: {contexto_data}
 
 				{categorias_texto}
-				Responda SOMENTE com JSON seguindo o formato:
+				INSTRUÇÕES:
+				1. Use as categorias disponíveis 
+				2. Extraia nome e marca base do produto quando possível
+				3. Seja objetivo nas justificativas (máx 5 palavras)
+				4. Responda APENAS com JSON válido
+
+				FORMATO DE RESPOSTA:
 				{{
 					"itens": [
-						{{
-							"sequencia": 1,
-							"categoria": "alimentacao",
-							"confianca": 0.84,
-							"produto": {{"nome_base": "Arroz branco 5kg", "marca_base": "Tio João"}},
-							"justificativa": "explicação curta"
-						}}
+						{{"sequencia": 1, "categoria": "alimentacao", "confianca": 0.84, "produto": {{"nome_base": "Arroz tipo 1", "marca_base": "Tio João"}}, "justificativa": "alimento básico"}}
 					]
 				}}
 
-				Inclua em cada item o objeto "produto" com o nome_base padronizado e, quando possível,
-				uma marca_base. Use apenas palavras sem acentos para as categorias, seguindo os valores
-				providenciados.
-
-				Itens:
+				ITENS PARA CLASSIFICAR:
 				{linhas_formatadas}
 			"""
 		)
@@ -202,7 +204,7 @@ class GroqClassifier:
 			"messages": [
 				{
 					"role": "system",
-					"content": "Você classifica itens de notas fiscais em categorias de orçamento. Use apenas uma palavra para a categoria.",
+					"content": "Você é um classificador de itens de notas fiscais. Responda apenas com JSON válido.",
 				},
 				{"role": "user", "content": prompt.strip()},
 			],
@@ -213,7 +215,8 @@ class GroqClassifier:
 			return {}
 		try:
 			dados = json.loads(_extrair_json_text(conteudo))
-		except json.JSONDecodeError:
+		except json.JSONDecodeError as e:
+			logger.error("Resposta da Groq não pôde ser decodificada como JSON: \n %s \n\n erro: %s", conteudo, str(e))
 			return {}
 
 		itens_dados: Iterable[dict[str, object]]
