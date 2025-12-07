@@ -119,7 +119,7 @@ def render_pagina_importacao() -> None:
 		with col_b:
 			executar_classificacao = st.checkbox(
 				"Classificar itens automaticamente",
-				value=False,
+				value=True,
 				help="Enfileira itens recém-importados para classificação via LLM",
 			)
 		submetido = st.form_submit_button("Importar nota")
@@ -172,39 +172,37 @@ def render_pagina_importacao() -> None:
 				st.session_state.pop("confirmar_reprocessamento", None)
 				logger.info("Usuário cancelou importação.")
 
-			def _cb_ver():
-				logger.info(f"Usuário pediu para ver nota existente {chave_normalizada}")
-				_redirecionar_para_editor(chave_normalizada)
+		def _cb_ver():
+			logger.info(f"Usuário pediu para ver nota existente {chave_normalizada}")
+			_redirecionar_para_editor(chave_normalizada)
 
-			col1, col2, col3 = st.columns(3)
-			with col1:
-				st.button(
-					"🔄 Sim, reprocessar",
-					key=f"reprocessar_{chave_normalizada}",
-					type="primary",
-					use_container_width=True,
-					on_click=_cb_reprocessar
-				)
-			with col2:
-				st.button(
-					"❌ Não, cancelar",
-					key=f"cancelar_{chave_normalizada}",
-					use_container_width=True,
-					on_click=_cb_cancelar
-				)
-			with col3:
-				st.button(
-					"👁️ Ver nota existente",
-					key=f"ver_{chave_normalizada}",
-					use_container_width=True,
-					on_click=_cb_ver
-				)
-			
-			# Interrompe o fluxo para aguardar ação do usuário
-			_renderizar_historico()
-			return
-
-		# Se chegou aqui, é porque confirmar_reprocessamento == chave_normalizada
+		col1, col2, col3 = st.columns(3)
+		with col1:
+			st.button(
+				"🔄 Sim, reprocessar",
+				key=f"reprocessar_{chave_normalizada}",
+				type="primary",
+				width="stretch",
+				on_click=_cb_reprocessar
+			)
+		with col2:
+			st.button(
+				"❌ Não, cancelar",
+				key=f"cancelar_{chave_normalizada}",
+				width="stretch",
+				on_click=_cb_cancelar
+			)
+		with col3:
+			st.button(
+				"👁️ Ver nota existente",
+				key=f"ver_{chave_normalizada}",
+				width="stretch",
+				on_click=_cb_ver
+			)
+		
+		# Interrompe o fluxo para aguardar ação do usuário
+		_renderizar_historico()
+		return		# Se chegou aqui, é porque confirmar_reprocessamento == chave_normalizada
 		# Proceder com a remoção da nota antiga
 		try:
 			with st.spinner("Removendo nota anterior do banco de dados..."):

@@ -1,4 +1,4 @@
-"""Integração com a Groq API para classificar automaticamente itens inéditos."""
+"""Integração com modelos Gemini via LiteLLM para classificar itens."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ from src.database import (
 )
 
 from src.logger import setup_logging
-from .groq import ClassificacaoResultado, GroqClassifier
+from .llm_classifier import ClassificacaoResultado, LLMClassifier
 from .embeddings import buscar_produtos_semelhantes
 
 logger = setup_logging("classifiers")
 
 __all__ = [
 	"ClassificacaoResultado",
-	"GroqClassifier",
+	"LLMClassifier",
 	"classificar_itens_pendentes",
 ]
 
@@ -30,12 +30,12 @@ def classificar_itens_pendentes(
 	limit: int = 25,
 	confirmar: bool = False,
 	db_path: str | None = None,
-	classifier: GroqClassifier | None = None,
+	classifier: LLMClassifier | None = None,
 	model: str | None = None,
 	temperature: float | None = None,
 	chave_acesso: str | None = None,
 ) -> list[ClassificacaoResultado]:
-	"""Busca itens sem categoria, envia para a Groq e persiste o resultado."""
+	"""Busca itens sem categoria, envia para o LLM configurado e persiste o resultado."""
 
 	itens = listar_itens_para_classificacao(
 		limit=limit,
@@ -54,7 +54,7 @@ def classificar_itens_pendentes(
 	else:
 		logger.info(f"Iniciando classificação de {len(itens)} itens.")
 	resultados_finais: list[ClassificacaoResultado] = []
-	itens_para_groq: list[ItemParaClassificacao] = []
+	itens_para_llm: list[ItemParaClassificacao] = []
 
 	# 1. Tentar classificação semântica via Chroma
 	for item in itens:
@@ -83,27 +83,27 @@ def classificar_itens_pendentes(
 					)
 					continue
 
-		# Se não encontrou ou confiança baixa, vai para Groq
-		itens_para_groq.append(item)
+		# Se não encontrou ou confiança baixa, vai para o LLM
+		itens_para_llm.append(item)
 
-	# 2. Processar itens restantes com Groq
-	if itens_para_groq:
+	# 2. Processar itens restantes com o LLM
+	if itens_para_llm:
 		categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
 
 		if classifier is None:
 			# Garantir que o prompt sempre receba as categorias conhecidas
 			if model is not None and temperature is not None:
-				classifier = GroqClassifier(model=model, temperature=temperature, categorias=categorias)
+				classifier = LLMClassifier(model=model, temperature=temperature, categorias=categorias)
 			elif model is not None:
-				classifier = GroqClassifier(model=model, categorias=categorias)
+				classifier = LLMClassifier(model=model, categorias=categorias)
 			elif temperature is not None:
-				classifier = GroqClassifier(temperature=temperature, categorias=categorias)
+				classifier = LLMClassifier(temperature=temperature, categorias=categorias)
 			else:
-				classifier = GroqClassifier(categorias=categorias)
+				classifier = LLMClassifier(categorias=categorias)
 
-		logger.info(f"Enviando {len(itens_para_groq)} itens para a Groq API.")
-		resultados_groq = classifier.classificar_itens(itens_para_groq)
-		resultados_finais.extend(resultados_groq)
+		logger.info(f"Enviando {len(itens_para_llm)} itens para a API do LLM configurado.")
+		resultados_llm = classifier.classificar_itens(itens_para_llm)
+		resultados_finais.extend(resultados_llm)
 
 	_salvar_resultados(resultados_finais, confirmar=confirmar, db_path=db_path)
 	logger.info(f"Classificação concluída. {len(resultados_finais)} itens processados.")

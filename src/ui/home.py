@@ -41,7 +41,7 @@ def render_home() -> None:
             df_cat = pd.DataFrame(dados_categoria)
             st.dataframe(
                 df_cat.style.format({"total": "R$ {:,.2f}"}),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
         else:

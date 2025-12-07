@@ -403,10 +403,35 @@ def _parse_informacoes_gerais(soup: BeautifulSoup) -> tuple[Optional[str], Optio
     serie: Optional[str] = None
     emissao: Optional[str] = None
 
+    # Layout 1: Procura por td.NFCCabecalho_SubTitulo com padrão "NFC-e nº: XXX Série: YYY Data de Emissão: DD/MM/YYYY HH:MM:SS"
+    # Usa \S para capturar caracteres especiais corrompidos (º, é, ã aparecem como �)
+    for td in soup.select("td.NFCCabecalho_SubTitulo"):
+        texto = td.get_text(" ", strip=True)
+        
+        numero_match = re.search(r"NFC-e\s+n\S*:\s*([0-9]+)", texto, re.IGNORECASE)
+        serie_match = re.search(r"S\S*rie:\s*([0-9]+)", texto, re.IGNORECASE)
+        emissao_match = re.search(r"Data\s+de\s+Emiss\S*o:\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})", texto, re.IGNORECASE)
+        
+        if numero_match:
+            numero = numero_match.group(1)
+        if serie_match:
+            serie = serie_match.group(1)
+        if emissao_match:
+            emissao = emissao_match.group(1).strip()
+        
+        # Se encontrou pelo menos a data, considera sucesso
+        if emissao:
+            break
+    
+    # Se encontrou informações, retorna
+    if numero or serie or emissao:
+        return numero, serie, emissao
+
+    # Layout 2 (fallback): Procura por h4 "informações gerais" + li (formato antigo)
     header: Optional[Tag] = None
     for candidato in soup.select("h4"):
         titulo = candidato.get_text(strip=True).lower()
-        if "informações gerais" in titulo:
+        if "informações gerais" in titulo or "informacoes gerais" in titulo:
             header = candidato
             break
     if header is None:

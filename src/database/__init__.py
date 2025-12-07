@@ -1865,7 +1865,7 @@ def obter_resumo_mensal(*, db_path: Path | str | None = None) -> list[dict[str, 
 		).fetchall()
 	
 	return [
-		{"mes": row[0], "total": _para_decimal(row[1]) or Decimal("0.00")}
+		{"mes": row[0], "total": float(_para_decimal(row[1]) or Decimal("0.00"))}
 		for row in rows
 	]
 
@@ -1893,6 +1893,6 @@ def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | st
 		rows = con.execute(query, params).fetchall()
 		
 	return [
-		{"categoria": row[0], "total": _para_decimal(row[1]) or Decimal("0.00")}
+		{"categoria": row[0], "total": float(_para_decimal(row[1]) or Decimal("0.00"))}
 		for row in rows
 	]
