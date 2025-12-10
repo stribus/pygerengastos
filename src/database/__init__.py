@@ -1,4 +1,4 @@
-"""Camada de persistência em DuckDB.
+"""Camada de persistência em SQLite3.
 
 Este módulo fornece utilitários para criar o schema padrão do sistema,
 persistir notas fiscais extraídas do portal da Receita Gaúcha e recuperar
@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
@@ -18,24 +19,19 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
-import duckdb
-
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 from src.logger import setup_logging
 
 logger = setup_logging("database")
 
 _BASE_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PATH = _BASE_DIR / "data" / "gastos.duckdb"
+DEFAULT_DB_PATH = _BASE_DIR / "data" / "gastos.db"
 DEFAULT_CATEGORIAS_CSV = _BASE_DIR / "data" / "categorias.csv"
 
 _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	"""
-	CREATE SEQUENCE IF NOT EXISTS seq_categorias START 1
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS categorias (
-		id INTEGER PRIMARY KEY DEFAULT nextval('seq_categorias'),
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		grupo TEXT NOT NULL,
 		nome TEXT NOT NULL,
 		ativo BOOLEAN DEFAULT TRUE,
@@ -45,14 +41,8 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	)
 	""",
 	"""
-	CREATE SEQUENCE IF NOT EXISTS seq_produtos START 1
-	""",
-	"""
-	CREATE SEQUENCE IF NOT EXISTS seq_estabelecimentos START 1
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS estabelecimentos (
-		id INTEGER PRIMARY KEY DEFAULT nextval('seq_estabelecimentos'),
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		nome TEXT,
 		cnpj TEXT,
 		cnpj_normalizado TEXT,
@@ -100,7 +90,7 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	""",
 	"""
 	CREATE TABLE IF NOT EXISTS produtos (
-		id INTEGER PRIMARY KEY DEFAULT nextval('seq_produtos'),
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		nome_base TEXT NOT NULL,
 		marca_base TEXT,
 		categoria_id INTEGER REFERENCES categorias(id),
@@ -110,11 +100,8 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	)
 	""",
 	"""
-	CREATE SEQUENCE IF NOT EXISTS seq_aliases_produtos START 1
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS aliases_produtos (
-		id INTEGER PRIMARY KEY DEFAULT nextval('seq_aliases_produtos'),
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		produto_id INTEGER NOT NULL REFERENCES produtos(id),
 		texto_original TEXT NOT NULL,
 		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -122,11 +109,8 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	)
 	""",
 	"""
-	CREATE SEQUENCE IF NOT EXISTS seq_revisoes_manuais START 1
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS revisoes_manuais (
-		id INTEGER PRIMARY KEY DEFAULT nextval('seq_revisoes_manuais'),
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		chave_acesso VARCHAR NOT NULL,
 		sequencia INTEGER NOT NULL,
 		categoria TEXT,
@@ -220,27 +204,8 @@ _VIEW_DEFINITIONS: tuple[str, ...] = (
 )
 
 _SCHEMA_MIGRATIONS: tuple[str, ...] = (
-	"""
-	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_id INTEGER
-	""",
-	"""
-	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_nome TEXT
-	""",
-	"""
-	ALTER TABLE itens ADD COLUMN IF NOT EXISTS produto_marca TEXT
-	""",
-	"""
-	ALTER TABLE notas ADD COLUMN IF NOT EXISTS emissao_data DATE
-	""",
-	"""
-	ALTER TABLE notas ADD COLUMN IF NOT EXISTS estabelecimento_id INTEGER
-	""",
-	"""
-	ALTER TABLE itens ADD COLUMN IF NOT EXISTS categoria_sugerida_id INTEGER
-	""",
-	"""
-	ALTER TABLE itens ADD COLUMN IF NOT EXISTS categoria_confirmada_id INTEGER
-	""",
+	# SQLite não suporta ADD COLUMN IF NOT EXISTS nativamente
+	# Vamos usar tentativa/exceção em _aplicar_schema()
 )
 
 
@@ -333,7 +298,7 @@ class RevisaoManual:
 
 
 def _criar_produto(
-	con: duckdb.DuckDBPyConnection,
+	con: sqlite3.Connection,
 	nome_base: str,
 	marca_base: str | None = None,
 	categoria_id: int | None = None,
@@ -343,16 +308,29 @@ def _criar_produto(
 	marca = marca_base.strip() if marca_base else None
 	if not nome:
 		raise ValueError("nome_base não pode ser vazio")
+	
 	try:
-		row = con.execute(
+		cursor = con.execute(
 			"""
 			INSERT INTO produtos (nome_base, marca_base, categoria_id)
 			VALUES (?, ?, ?)
-			RETURNING id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
 			""",
 			[nome, marca, categoria_id],
+		)
+		produto_id = cursor.lastrowid
+		
+		# Busca o produto recém-criado
+		row = con.execute(
+			"""
+			SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
+			FROM produtos
+			WHERE id = ?
+			""",
+			[produto_id],
 		).fetchone()
-	except duckdb.Error:
+		
+	except sqlite3.IntegrityError:
+		# Produto já existe (violação de UNIQUE), busca ele
 		row = con.execute(
 			"""
 			SELECT id, nome_base, marca_base, categoria_id, criado_em, atualizado_em
@@ -363,8 +341,10 @@ def _criar_produto(
 			""",
 			[nome, marca or ""],
 		).fetchone()
+	
 	if not row:
 		raise RuntimeError("Não foi possível criar ou recuperar o produto")
+	
 	return ProdutoPadronizado(
 		id=row[0],
 		nome_base=row[1],
@@ -376,7 +356,7 @@ def _criar_produto(
 
 
 def _buscar_produto_por_descricao_similaridade(
-	con: duckdb.DuckDBPyConnection,
+	con: sqlite3.Connection,
 	descricao: str,
 	*,
 	score_minimo: float | None = None,
@@ -538,34 +518,56 @@ def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 	return caminho
 
 
-def _aplicar_schema(con: duckdb.DuckDBPyConnection) -> None:
+def _aplicar_schema(con: sqlite3.Connection) -> None:
+	# Habilita foreign keys (desabilitado por padrão no SQLite)
+	con.execute("PRAGMA foreign_keys = ON")
+	
 	for ddl in _SCHEMA_DEFINITIONS:
 		con.execute(ddl)
-	for ddl in _SCHEMA_MIGRATIONS:
-		con.execute(ddl)
+	
+	# SQLite não tem ADD COLUMN IF NOT EXISTS, então tratamos erros
+	migrations = [
+		"ALTER TABLE itens ADD COLUMN produto_id INTEGER",
+		"ALTER TABLE itens ADD COLUMN produto_nome TEXT",
+		"ALTER TABLE itens ADD COLUMN produto_marca TEXT",
+		"ALTER TABLE notas ADD COLUMN emissao_data DATE",
+		"ALTER TABLE notas ADD COLUMN estabelecimento_id INTEGER",
+		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
+		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
+	]
+	
+	for migration in migrations:
+		try:
+			con.execute(migration)
+		except sqlite3.OperationalError:
+			# Coluna já existe, ignora
+			pass
+	
 	for ddl in _VIEW_DEFINITIONS:
 		con.execute(ddl)
 
 
 @contextmanager
-def conexao(db_path: Path | str | None = None) -> Iterator[duckdb.DuckDBPyConnection]:
-	"""Abre uma conexão com o DuckDB garantindo que o schema exista."""
+def conexao(db_path: Path | str | None = None) -> Iterator[sqlite3.Connection]:
+	"""Abre uma conexão com o SQLite garantindo que o schema exista."""
 
-	con = duckdb.connect(str(_resolver_caminho_banco(db_path)))
+	con = sqlite3.connect(str(_resolver_caminho_banco(db_path)))
 	try:
 		_aplicar_schema(con)
 		yield con
-	except duckdb.Error as e:
+		con.commit()  # Commit automático ao sair do context manager
+	except sqlite3.Error as e:
+		con.rollback()  # Rollback em caso de erro
 		logger.error(f"Erro no banco de dados: {e}")
 		raise
 	finally:
 		con.close()
 
 
-def inicializar_banco(db_path: Path | str | None = None) -> duckdb.DuckDBPyConnection:
+def inicializar_banco(db_path: Path | str | None = None) -> sqlite3.Connection:
 	"""Cria (se necessário) e retorna uma conexão pronta para uso."""
 
-	con = duckdb.connect(str(_resolver_caminho_banco(db_path)))
+	con = sqlite3.connect(str(_resolver_caminho_banco(db_path)))
 	_aplicar_schema(con)
 	logger.info("Schema do banco de dados inicializado com sucesso.")
 	return con
@@ -630,7 +632,7 @@ def carregar_nota(
 	*,
 	db_path: Path | str | None = None,
 ) -> NotaFiscal | None:
-	"""Reconstrói uma nota fiscal completa a partir do DuckDB."""
+	"""Reconstrói uma nota fiscal completa a partir do SQLite3."""
 	with conexao(db_path) as con:
 		nota_row = con.execute(
 			"""
@@ -786,7 +788,7 @@ def listar_notas_para_revisao(
 		LIMIT ?
 	"""
 
-	with duckdb.connect(str(db_file)) as con:
+	with sqlite3.connect(str(db_file)) as con:
 		rows = con.execute(query, [limit]).fetchall()
 
 	return [
@@ -1100,6 +1102,16 @@ def registrar_classificacao_itens(
 					produto_obj = _resolver_produto_por_nome_marca(con, prod_nome, prod_marca, cat)
 					if produto_obj:
 						produto_id = produto_obj.id
+						# Se o produto foi retornado mas sem categoria, e temos uma categoria válida, atualiza
+						if produto_obj.categoria_id is None and categoria_id is not None:
+							try:
+								con.execute(
+									"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+									[categoria_id, produto_id]
+								)
+								logger.debug(f"Categoria {cat} associada ao produto {produto_id} durante classificação")
+							except Exception as e:
+								logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
 
 				# Montar update dinâmico
 				sql_update = """
@@ -1278,7 +1290,7 @@ def listar_revisoes_manuais(
 
 
 def _resolver_produto_por_nome_marca(
-	con: duckdb.DuckDBPyConnection,
+	con: sqlite3.Connection,
 	nome: str,
 	marca: str | None,
 	categoria_nome: str | None
@@ -1290,6 +1302,13 @@ def _resolver_produto_por_nome_marca(
 		return None
 		
 	marca = marca.strip() if marca else None
+	
+	# Resolver categoria_id se categoria_nome foi fornecida
+	categoria_id = None
+	if categoria_nome:
+		cat_row = con.execute("SELECT id FROM categorias WHERE lower(nome) = lower(?)", [categoria_nome]).fetchone()
+		if cat_row:
+			categoria_id = cat_row[0]
 	
 	# Tenta achar exato
 	query_busca = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
@@ -1303,15 +1322,23 @@ def _resolver_produto_por_nome_marca(
 		
 	row = con.execute(query_busca, params_busca).fetchone()
 	if row:
-		return ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
+		produto_id, nome_base, marca_base, categoria_id_atual = row[0], row[1], row[2], row[3]
 		
-	# Se não achou, cria
-	categoria_id = None
-	if categoria_nome:
-		cat_row = con.execute("SELECT id FROM categorias WHERE lower(nome) = lower(?)", [categoria_nome]).fetchone()
-		if cat_row:
-			categoria_id = cat_row[0]
-			
+		# Se o produto existe sem categoria e recebemos uma categoria válida, atualiza
+		if categoria_id_atual is None and categoria_id is not None:
+			try:
+				con.execute(
+					"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+					[categoria_id, produto_id]
+				)
+				logger.debug(f"Categoria atualizada para produto {produto_id}: {categoria_nome}")
+				return ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=categoria_id)
+			except Exception as e:
+				logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
+		
+		return ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=categoria_id_atual)
+		
+	# Se não achou, cria com a categoria se disponível
 	try:
 		con.execute(
 			"""
@@ -1321,7 +1348,7 @@ def _resolver_produto_por_nome_marca(
 			[nome, marca, categoria_id]
 		)
 		# Recupera ID gerado
-		# DuckDB suporta RETURNING id, mas para compatibilidade garantida fazemos select
+		# SQLite3 suporta RETURNING id, mas para compatibilidade garantida fazemos select
 		# Na verdade, com RETURNING é melhor:
 		# row_id = con.execute("INSERT ... RETURNING id").fetchone()
 		# Mas vamos manter o padrão de busca pós-insert se o driver antigo não suportar
@@ -1338,7 +1365,7 @@ def _resolver_produto_por_nome_marca(
 	return None
 
 
-def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
+def _persistir_nota(con: sqlite3.Connection, nota: NotaFiscal) -> None:
 	emissao_iso, emissao_data = _converter_data_iso_e_data(nota.emissao)
 	if emissao_data:
 		_garantir_dim_data(con, emissao_data)
@@ -1384,7 +1411,7 @@ def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 			tributos = excluded.tributos,
 			consumidor_cpf = excluded.consumidor_cpf,
 			consumidor_nome = excluded.consumidor_nome,
-			atualizado_em = now()
+			atualizado_em = CURRENT_TIMESTAMP
 		""",
 		[
 			nota.chave_acesso,
@@ -1415,7 +1442,7 @@ def _persistir_nota(con: duckdb.DuckDBPyConnection, nota: NotaFiscal) -> None:
 
 
 def _persistir_itens(
-	con: duckdb.DuckDBPyConnection, chave: str, itens: Iterable[NotaItem]
+	con: sqlite3.Connection, chave: str, itens: Iterable[NotaItem]
 ) -> None:
 	for sequencia, item in enumerate(itens, start=1):
 		produto = _resolver_produto_por_descricao(con, item.descricao)
@@ -1443,7 +1470,7 @@ def _persistir_itens(
 				fonte_classificacao,
 				confianca_classificacao,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, now())
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
 			""",
 			[
 				chave,
@@ -1466,7 +1493,7 @@ def _persistir_itens(
 
 
 def _persistir_pagamentos(
-	con: duckdb.DuckDBPyConnection, chave: str, pagamentos: Iterable[Pagamento]
+	con: sqlite3.Connection, chave: str, pagamentos: Iterable[Pagamento]
 ) -> None:
 	for pgto in pagamentos:
 		con.execute(
@@ -1479,7 +1506,7 @@ def _persistir_pagamentos(
 
 
 def _resolver_produto_por_descricao(
-	con: duckdb.DuckDBPyConnection, descricao: str
+	con: sqlite3.Connection, descricao: str
 ) -> ProdutoPadronizado | None:
 	"""Tenta encontrar um produto existente via alias ou cria um novo baseado na descrição."""
 	
@@ -1574,7 +1601,7 @@ def _converter_data_iso_e_data(texto: str | None) -> tuple[str | None, str | Non
 
 
 def _garantir_dim_data(
-	con: duckdb.DuckDBPyConnection, data_iso: str | None
+	con: sqlite3.Connection, data_iso: str | None
 ) -> str | None:
 	"""Garante que a data informada exista em datas_referencia."""
 	if not data_iso:
@@ -1639,7 +1666,7 @@ def _normalizar_cnpj(cnpj: str | None) -> str | None:
 
 
 def _obter_ou_criar_estabelecimento(
-	con: duckdb.DuckDBPyConnection,
+	con: sqlite3.Connection,
 	nome: str | None,
 	cnpj: str | None,
 	endereco: str | None,
@@ -1672,19 +1699,19 @@ def _obter_ou_criar_estabelecimento(
 			return est_id
 	if not nome and not normalizado and not endereco:
 		return None
-	resultado = con.execute(
+	
+	cursor = con.execute(
 		"""
 		INSERT INTO estabelecimentos (nome, cnpj, cnpj_normalizado, endereco)
 		VALUES (?, ?, ?, ?)
-		RETURNING id
 		""",
 		[nome, cnpj, normalizado, endereco],
-	).fetchone()
-	return int(resultado[0]) if resultado else None
+	)
+	return cursor.lastrowid
 
 
 def _consolidar_estabelecimento(
-	con: duckdb.DuckDBPyConnection,
+	con: sqlite3.Connection,
 	est_id: int,
 	nome: str | None,
 	cnpj: str | None,
@@ -1730,7 +1757,7 @@ def _consolidar_estabelecimento(
 
 
 def _resolver_categoria_id(
-	con: duckdb.DuckDBPyConnection, categoria_nome: str | None
+	con: sqlite3.Connection, categoria_nome: str | None
 ) -> int | None:
 	if not categoria_nome:
 		return None
@@ -1749,17 +1776,15 @@ def _resolver_categoria_id(
 	if row:
 		return int(row[0])
 	try:
-		novo = con.execute(
+		cursor = con.execute(
 			"""
 			INSERT INTO categorias (grupo, nome)
 			VALUES (?, ?)
-			RETURNING id
 			""",
 			["Livres", nome],
-		).fetchone()
-		if novo:
-			return int(novo[0])
-	except duckdb.Error:
+		)
+		return cursor.lastrowid
+	except sqlite3.Error:
 		row = con.execute(
 			"SELECT id FROM categorias WHERE lower(nome) = lower(?) ORDER BY id DESC LIMIT 1",
 			[nome],

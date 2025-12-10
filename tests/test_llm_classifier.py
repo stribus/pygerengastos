@@ -45,7 +45,7 @@ def _item_para_classificacao() -> ItemParaClassificacao:
 	)
 
 
-def test_groq_classifier_interpreta_json_e_retorna_resultados():
+def test_llm_classifier_interpreta_json_e_retorna_resultados():
 	conteudo = {
 		"choices": [
 			{
@@ -95,7 +95,7 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 	nota = receita_rs.parse_nota(FIXTURE_HTML.read_text(encoding="utf-8"), FIXTURE_CHAVE)
 	_salvar_para_tmp(tmp_path, nota)
 
-	class FakeGroq(LLMClassifier):  # type: ignore[misc]
+	class FakeLLM(LLMClassifier):  # type: ignore[misc]
 		def __init__(self):  # pylint: disable=super-init-not-called
 			self.chamadas = 0
 			self.model = "fake"
@@ -115,10 +115,10 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 				for item in itens
 			]
 
-	classificador = FakeGroq()
+	classificador = FakeLLM()
 	resultados = classificar_itens_pendentes(
 		classifier=cast(LLMClassifier, classificador),
-		db_path=tmp_path / "tmp.duckdb",
+		db_path=tmp_path / "tmp.db",
 		limit=2,
 		confirmar=True,
 	)
@@ -138,14 +138,14 @@ def test_classificar_itens_pendentes_filtra_por_chave():
 
 def _salvar_para_tmp(tmp_path, nota):
 	# Helper para persistir nota no banco temporário durante o teste
-	salvar_nota(nota, db_path=tmp_path / "tmp.duckdb")
+	salvar_nota(nota, db_path=tmp_path / "tmp.db")
 
 
 @pytest.mark.skipif(
 	not os.getenv("GEMINI_API_KEY"),
 	reason="GEMINI_API_KEY não configurada - teste de integração ignorado"
 )
-def test_groq_api_real_classifica_itens_e_retorna_json_valido():
+def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 	"""Teste de integração real com modelo Gemini via LiteLLM.
 	
 	Valida que:

@@ -14,7 +14,7 @@ def _setup_produto_temporario(db_path: Path) -> int:
 
 
 def test_busca_produto_semelhante_utiliza_embeddings(monkeypatch, tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.db"
     produto_id = _setup_produto_temporario(db_path)
 
     def _fake_busca(descricao: str, top_k: int = 3):
@@ -35,7 +35,7 @@ def test_busca_produto_semelhante_utiliza_embeddings(monkeypatch, tmp_path):
 
 
 def test_busca_produto_semelhante_ignora_similaridade_baixa(monkeypatch, tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.db"
     produto_id = _setup_produto_temporario(db_path)
 
     def _fake_busca(descricao: str, top_k: int = 3):

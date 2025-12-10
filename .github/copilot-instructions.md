@@ -5,7 +5,7 @@
 Este é um sistema de gerenciamento de despesas mensais em Python que implementa um pipeline completo:
 1. **Web Scraping**: Extrai NFC-e do site da SEFAZ-RS via POST request com cabeçalhos específicos
 2. **Classificação Híbrida**: Usa busca semântica (ChromaDB + SentenceTransformers) com fallback para LLM (Gemini via LiteLLM)
-3. **Persistência**: DuckDB com schema dimensional (datas, estabelecimentos, produtos, categorias)
+3. **Persistência**: SQLite3 com schema dimensional (datas, estabelecimentos, produtos, categorias)
 4. **Interface**: Streamlit com 3 abas (Home/Importação/Análise) e navegação com redirecionamento
 
 ## Stack Tecnológico
@@ -15,7 +15,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que implementa
 - **IA/ML**: 
   - Busca semântica: ChromaDB 1.3.5 + SentenceTransformers 5.1.2 (modelo `all-MiniLM-L6-v2`)
   - LLM: LiteLLM apontando para `gemini/gemini-2.5-flash-lite` (não `3-pro-preview`)
-- **Banco de Dados**: DuckDB com schema normalizado e views agregadas
+- **Banco de Dados**: SQLite3 (nativo Python) com schema normalizado e views agregadas
 - **Web Scraping**: httpx + BeautifulSoup4
 - **Ambiente**: `uv` como gerenciador de pacotes (use `uv pip`, `uv add`, nunca `pip install` direto)
 - **Logging**: Sistema centralizado via `src/logger.py` com RotatingFileHandler em `logs/app.log`
@@ -36,6 +36,15 @@ O sistema usa **classificação semântica prioritária** com fallback para LLM:
 3. **Persistência Automática**: Ambos os fluxos atualizam DuckDB e registram embeddings via `_registrar_alias_produto()`
 
 **Exemplo de implementação**: Ver `src/classifiers/__init__.py::classificar_itens_pendentes()` e testes em `tests/test_semantic_integration.py`
+
+## Por que SQLite3?
+
+O projeto **migrou de DuckDB para SQLite3** (dezembro/2025) pelos seguintes motivos:
+
+- **Melhor suporte a UPDATE com Foreign Keys**: SQLite3 permite `PRAGMA foreign_keys = OFF` temporário, resolvendo limitações do DuckDB ao atualizar colunas em tabelas com FKs apontando para elas
+- **Maturidade OLTP**: Mais estável para operações frequentes de insert/update (CRUD típico)
+- **Portabilidade**: Arquivo único `.db` sem dependências externas, nativo no Python (não precisa instalar pacote)
+- **Performance adequada**: Volume de dados (notas fiscais pessoais) não justifica complexidade do DuckDB
 
 ## Convenções Específicas do Projeto
 
@@ -94,13 +103,13 @@ pytest  # Filtra warnings do pydantic/litellm via pyproject.toml
 │   │   ├── embeddings.py        # ChromaDB: upsert_produto_embedding(), buscar_produtos_semelhantes()
 │   │   └── llm_classifier.py    # LLMClassifier - wrapper LiteLLM/Gemini
 │   ├── database/
-│   │   └── __init__.py          # DuckDB: salvar_nota(), registrar_classificacao_itens(), views
+│   │   └── __init__.py          # SQLite3: salvar_nota(), registrar_classificacao_itens(), views
 │   └── ui/
 │       ├── home.py              # Dashboard com KPIs e gráficos mensais
 │       ├── importacao.py        # Input chave NFC-e + classificação automática
 │       └── analise.py           # Edição de categoria/produto + histórico de revisões
 ├── data/
-│   ├── gastos.duckdb            # Banco principal
+│   ├── gastos.db                # Banco principal (SQLite3)
 │   ├── categorias.csv           # Seed de categorias (carregado via seed_categorias_csv())
 │   ├── chroma/                  # Índice de embeddings
 │   └── raw_nfce/                # HTMLs brutos das notas (debug)
@@ -109,7 +118,7 @@ pytest  # Filtra warnings do pydantic/litellm via pyproject.toml
 └── pyproject.toml               # Config uv + pytest (filtra warnings)
 ```
 
-## Schema DuckDB (Dimensional)
+## Schema SQLite3 (Dimensional)
 
 ### Tabelas Principais
 - `notas`: Cabeçalho da NFC-e (chave_acesso PK, estabelecimento_id FK, emissao_data)
@@ -129,7 +138,7 @@ pytest  # Filtra warnings do pydantic/litellm via pyproject.toml
 
 ## Padrões de Implementação
 
-### Transações DuckDB
+### Transações SQLite3
 ```python
 from src.database import conexao, salvar_nota
 
@@ -179,7 +188,7 @@ registrar_revisoes_manuais([...], confirmar=True, usuario="João")
 ## Considerações de Performance
 
 - **ChromaDB**: Índice regenerado automaticamente em `upsert_produto_embedding()` após cada classificação
-- **DuckDB**: Queries rápidas via views materializadas (`vw_itens_padronizados`)
+- **SQLite3**: Queries rápidas via views materializadas (`vw_itens_padronizados`)
 - **LLM**: Apenas chamado para itens sem match semântico (economia de tokens/custo)
 - **HTML Cache**: `data/raw_nfce/` facilita re-parsing sem re-scraping
 

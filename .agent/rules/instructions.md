@@ -54,7 +54,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 
 ### Classificação com IA
 - Use LiteLLM apontando para `gemini/gemini-2.5-pro` para classificar itens nunca processados
-- Configure `GEMINI_API_KEY` no `.env` (fallback opcional para `GROQ_API_KEY` apenas para compatibilidade)
+- Configure `GEMINI_API_KEY` no `.env`
 - Armazene classificações para evitar reprocessamento
 - Implemente fallback para classificação manual
 

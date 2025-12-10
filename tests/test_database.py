@@ -30,7 +30,7 @@ def _nota_exemplo():
 
 
 def test_salvar_e_carregar_nota(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
 
     salvar_nota(nota, db_path=db_path)
@@ -63,7 +63,7 @@ def test_salvar_e_carregar_nota(tmp_path):
 
 
 def test_listar_notas_retorna_resumo(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
 
     salvar_nota(nota, db_path=db_path)
@@ -79,7 +79,7 @@ def test_listar_notas_retorna_resumo(tmp_path):
 
 
 def test_listar_itens_para_classificacao_retorna_itens(tmp_path):
-	db_path = tmp_path / "test.duckdb"
+	db_path = tmp_path / "test.sqlite3"
 	nota = _nota_exemplo()
 
 	salvar_nota(nota, db_path=db_path)
@@ -92,7 +92,7 @@ def test_listar_itens_para_classificacao_retorna_itens(tmp_path):
 
 
 def test_listar_itens_para_revisao_filtra_pendentes(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
 
     salvar_nota(nota, db_path=db_path)
@@ -119,7 +119,7 @@ def test_listar_itens_para_revisao_filtra_pendentes(tmp_path):
 
 
 def test_seed_categorias_csv_insere_sem_duplicar(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     csv_path = tmp_path / "categorias.csv"
     csv_path.write_text("Grupo,Categoria\nGrupo A,Cat 1\nGrupo A,Cat 2\n", encoding="utf-8")
 
@@ -145,7 +145,7 @@ def test_normalizar_produto_descricao_detecta_marca_e_remove_unidade():
 
 
 def test_salvar_nota_cria_produtos_e_aliases(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
 
@@ -172,7 +172,7 @@ def test_salvar_nota_cria_produtos_e_aliases(tmp_path):
     assert produtos_total_row[0] >= 1
     assert aliases_total_row[0] >= 1
 def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
 
@@ -225,7 +225,7 @@ def test_registrar_classificacao_itens_atualiza_tabelas(tmp_path):
 
 
 def test_registrar_revisoes_manuais_salva_historico(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
 
@@ -277,7 +277,7 @@ def test_registrar_revisoes_manuais_salva_historico(tmp_path):
 
 
 def test_listar_itens_padronizados_retorna_dimensoes(tmp_path):
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
 
