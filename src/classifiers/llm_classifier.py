@@ -20,6 +20,7 @@ logger = setup_logging(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 DEFAULT_MAX_TOKENS = 8000
+MAX_ITENS_POR_CHAMADA = 50
 _ENV_LOADED = False
 
 
@@ -97,37 +98,39 @@ class LLMClassifier:
 		if not itens:
 			return []
 
-		payload = self._montar_payload(itens)
-		conteudo, resposta_raw = self._executar_chamada(payload)
-		mapeamento = self._interpretar_resposta(conteudo)
-		if not mapeamento:
-			return []
-
-		resposta_json = json.dumps(
-			{"payload": payload, "resposta": resposta_raw}, ensure_ascii=False
-		)
-
 		resultados: list[ClassificacaoResultado] = []
-		for item in itens:
-			resposta = mapeamento.get(item.sequencia)
-			if resposta is None:
+		for indice_bloco, bloco in enumerate(_dividir_em_blocos(itens, MAX_ITENS_POR_CHAMADA), start=1):
+			payload = self._montar_payload(bloco)
+			conteudo, resposta_raw = self._executar_chamada(payload)
+			mapeamento = self._interpretar_resposta(conteudo)
+			if not mapeamento:
 				continue
-			categoria = _normalizar_categoria(resposta.categoria)
-			if not categoria:
-				continue
-			resultados.append(
-				ClassificacaoResultado(
-					chave_acesso=item.chave_acesso,
-					sequencia=item.sequencia,
-					categoria=categoria,
-					confianca=resposta.confianca,
-					modelo=self.model,
-					observacoes=resposta.justificativa,
-					resposta_json=resposta_json,
-					produto_nome=resposta.produto_nome,
-					produto_marca=resposta.produto_marca,
-				)
+
+			resposta_json = json.dumps(
+				{"chunk": indice_bloco, "payload": payload, "resposta": resposta_raw}, ensure_ascii=False
 			)
+
+			for item in bloco:
+				resposta = mapeamento.get(item.sequencia)
+				if resposta is None:
+					continue
+				categoria = _normalizar_categoria(resposta.categoria)
+				if not categoria:
+					continue
+				resultados.append(
+					ClassificacaoResultado(
+						chave_acesso=item.chave_acesso,
+						sequencia=item.sequencia,
+						categoria=categoria,
+						confianca=resposta.confianca,
+						modelo=self.model,
+						observacoes=resposta.justificativa,
+						resposta_json=resposta_json,
+						produto_nome=resposta.produto_nome,
+						produto_marca=resposta.produto_marca,
+					)
+				)
+
 		return resultados
 
 	def _executar_chamada(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -320,3 +323,13 @@ def _formatar_decimal(valor: Decimal | None) -> str:
 	if valor is None:
 		return "0.00"
 	return f"{valor:.2f}"
+
+
+def _dividir_em_blocos(
+	itens: Sequence[ItemParaClassificacao], tamanho_bloco: int
+) -> Iterable[Sequence[ItemParaClassificacao]]:
+	if tamanho_bloco <= 0:
+		raise ValueError("tamanho_bloco precisa ser positivo")
+	lista_itens = list(itens)
+	for inicio in range(0, len(lista_itens), tamanho_bloco):
+		yield lista_itens[inicio : inicio + tamanho_bloco]

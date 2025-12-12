@@ -11,7 +11,7 @@ import pytest
 from litellm.exceptions import RateLimitError
 
 from src.classifiers import ClassificacaoResultado, classificar_itens_pendentes
-from src.classifiers.llm_classifier import LLMClassifier
+from src.classifiers.llm_classifier import LLMClassifier, MAX_ITENS_POR_CHAMADA
 from src.database import ItemParaClassificacao, salvar_nota
 from src.scrapers import receita_rs
 
@@ -134,6 +134,60 @@ def test_classificar_itens_pendentes_filtra_por_chave():
 		assert mock_listar.call_count == 1
 		kwargs = mock_listar.call_args.kwargs
 		assert kwargs["chave_acesso"] == "ABC123"
+
+
+def test_llm_classifier_divide_requisicoes_em_chunks(monkeypatch):
+	classifier = LLMClassifier(api_key="fake")
+	itens: list[ItemParaClassificacao] = [
+		ItemParaClassificacao(
+			chave_acesso="123",
+			sequencia=indice + 1,
+			descricao=f"Item {indice + 1}",
+			codigo=None,
+			quantidade=Decimal("1"),
+			unidade="UN",
+			valor_unitario=Decimal("1.00"),
+			valor_total=Decimal("1.00"),
+			categoria_sugerida=None,
+			categoria_confirmada=None,
+			emitente_nome="Mercado",
+			emissao_iso="2024-05-10T10:00:00",
+		)
+		for indice in range(MAX_ITENS_POR_CHAMADA + 5)
+	]
+
+	sequencias_por_bloco: list[list[int]] = []
+	chamadas_executadas: list[int] = []
+
+	def _fake_montar_payload(self, itens_chunk):  # type: ignore[override]
+		sequencias_por_bloco.append([item.sequencia for item in itens_chunk])
+		return {
+			"model": self.model,
+			"messages": [
+				{"role": "system", "content": "teste"},
+				{"role": "user", "content": "chunk"},
+			],
+		}
+
+	def _fake_executar(self, payload):  # type: ignore[override]
+		indice = len(chamadas_executadas)
+		sequencias = sequencias_por_bloco[indice]
+		conteudo = json.dumps(
+			{"itens": [{"sequencia": seq, "categoria": "teste"} for seq in sequencias]}
+		)
+		chamadas_executadas.append(1)
+		return conteudo, {"choices": [{"message": {"content": conteudo}}]}
+
+	monkeypatch.setattr(LLMClassifier, "_montar_payload", _fake_montar_payload)
+	monkeypatch.setattr(LLMClassifier, "_executar_chamada", _fake_executar)
+
+	resultados = classifier.classificar_itens(itens)
+
+	expected_chunks = (len(itens) + MAX_ITENS_POR_CHAMADA - 1) // MAX_ITENS_POR_CHAMADA
+	assert len(sequencias_por_bloco) == expected_chunks
+	assert len(chamadas_executadas) == expected_chunks
+	assert all(len(chunk) <= MAX_ITENS_POR_CHAMADA for chunk in sequencias_por_bloco)
+	assert len(resultados) == len(itens)
 
 
 def _salvar_para_tmp(tmp_path, nota):

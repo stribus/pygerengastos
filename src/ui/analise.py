@@ -5,6 +5,7 @@ from typing import Any, List
 import pandas as pd
 import streamlit as st
 
+from src.classifiers import classificar_itens_pendentes
 from src.database import (
     ItemNotaRevisao,
     NotaParaRevisao,
@@ -109,6 +110,44 @@ def render_pagina_analise() -> None:
         return
 
     df_base = _montar_editor(itens)
+
+    itens_pendentes_total = int(nota.itens_pendentes or 0)
+    botao_reprocessar = st.button(
+        "Reprocessar itens pendentes via IA",
+        type="secondary",
+        disabled=itens_pendentes_total == 0,
+        help="Envia todos os itens ainda sem categoria confirmada para a classificação automática.",
+    )
+
+    if botao_reprocessar and itens_pendentes_total > 0:
+        limite_classificacao = max(itens_pendentes_total, len(itens), 1)
+        try:
+            with st.spinner("Reprocessando itens pendentes com a IA..."):
+                resultados = classificar_itens_pendentes(
+                    limit=limite_classificacao,
+                    confirmar=False,
+                    chave_acesso=nota.chave_acesso,
+                )
+        except Exception as exc:  # pragma: no cover - interação manual
+            st.error(f"Não foi possível reenviar os itens para a IA: {exc}")
+        else:
+            fila = st.session_state.setdefault("flash_analisar_msgs", [])
+            if resultados:
+                fila.append(
+                    {
+                        "tipo": "success",
+                        "texto": f"{len(resultados)} item(ns) reprocessado(s) automaticamente.",
+                    }
+                )
+            else:
+                fila.append(
+                    {
+                        "tipo": "info",
+                        "texto": "Nenhum item pendente estava disponível para reprocessamento.",
+                    }
+                )
+            st.session_state["nota_em_revisao"] = nota.chave_acesso
+            st.rerun()
 
     with st.form(f"form_revisao_{nota.chave_acesso}"):
         st.write("Ajuste os campos necessários e escolha salvar rascunho ou confirmar.")
