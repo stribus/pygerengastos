@@ -68,7 +68,7 @@ A função `listar_itens_padronizados()` lê diretamente essa view, o que simpli
 
 ## Classificação com LiteLLM (Gemini)
 
-Configure a variável `GEMINI_API_KEY` no arquivo `.env`  para habilitar a integração. O módulo `src.classifiers.llm_classifier` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no DuckDB, chama o modelo `gemini/gemini-2.5-pro` via LiteLLM e grava o histórico:
+Configure a variável `GEMINI_API_KEY` no arquivo `.env`  para habilitar a integração. O módulo `src.classifiers.llm_classifier` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no SQLite3, chama o modelo `gemini/gemini-2.5-pro` via LiteLLM e grava o histórico:
 
 ## Classificação semântica (Chroma + fallback no LLM)
 
@@ -133,13 +133,13 @@ Após extrair o pacote em outro ambiente, basta executar `setup.ps1` (caso não 
 
 ## Testes
 
-Execute a suíte completa (scraper + DuckDB) para garantir que tudo esteja consistente:
+Execute a suíte completa (scraper + SQLite3) para garantir que tudo esteja consistente:
 
     python -m pytest
 
 ## Próximos passos
 
 - Evoluir a integração do LiteLLM/Gemini (monitor de custo, retries e estratégias de fallback adicionais) e registrar histórico/correções manuais.
-- Persistir notas, itens e categorias em DuckDB para consultas analíticas.
+- Persistir notas, itens e categorias em SQLite3 para consultas analíticas.
 - Construir dashboards Streamlit (lista de notas, filtros por período e gráficos mensais por categoria).
 

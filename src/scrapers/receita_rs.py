@@ -38,6 +38,11 @@ _POST_HEADER_EXTRAS = {
     "Content-Type": "application/x-www-form-urlencoded",
 }
 _DIGITS_ONLY = re.compile(r"\D+")
+_META_CHARSET_RE = re.compile(r"(<meta[^>]*charset\s*=\s*[\"']?)([^\s\"'>]+)([^>]*>)", re.IGNORECASE)
+_META_HTTP_EQUIV_RE = re.compile(
+    r"(<meta[^>]*http-equiv\s*=\s*[\"']?content-type[\"']?[^>]*content\s*=\s*[\"'][^\"']*charset=)([^\s\"'>]+)([^>]*>)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -132,7 +137,7 @@ def baixar_html(
     try:
         response = session.post(NFCE_POST_URL, data=payload, headers=request_headers)
         response.raise_for_status()
-        html = response.text
+        html = _normalizar_html_response(response)
         _persistir_html(chave_sanitizada, html, destino_html)
         logger.info(f"HTML baixado com sucesso para chave {chave_sanitizada}")
         return html
@@ -151,7 +156,7 @@ def buscar_nota(chave: str, *, client: Optional[httpx.Client] = None) -> NotaFis
 
 def carregar_nfce_de_arquivo(caminho: Path | str) -> NotaFiscal:
     path = Path(caminho)
-    html = path.read_text(encoding="utf-8")
+    html = _ler_html_arquivo(path)
     return parse_nfce_html(html)
 
 
@@ -161,6 +166,86 @@ def _persistir_html(chave: str, html: str, destino: Optional[Path]) -> Path:
     arquivo = pasta / f"nfce_{chave}.html"
     arquivo.write_text(html, encoding="utf-8")
     return arquivo
+
+
+def _normalizar_html_response(response: httpx.Response) -> str:
+    """Decodifica corretamente HTML ISO-8859-1 e força meta charset para UTF-8.
+
+    A SEFAZ-RS devolve páginas com meta charset=iso-8859-1. Se `response.text`
+    usar utf-8 por engano, os caracteres acentuados corrompem. Aqui detectamos
+    a origem, decodificamos e já atualizamos o `<meta charset>` para UTF-8
+    antes de persistir.
+    """
+
+    raw = response.content
+
+    # Detecta charset declarado no Content-Type header ou no HTML
+    encoding = None
+    content_type = response.headers.get("Content-Type", "")
+    match = re.search(r"charset=([\w-]+)", content_type, re.IGNORECASE)
+    if match:
+        encoding = match.group(1)
+
+    if not encoding:
+        # Olha o HTML bruto (decodificado em latin-1 para evitar falhas) e tenta
+        # achar a declaração de charset.
+        snippet = raw[:4096].decode("latin-1", errors="ignore")
+        meta_match = re.search(r"charset=([\w-]+)", snippet, re.IGNORECASE)
+        if meta_match:
+            encoding = meta_match.group(1)
+
+    # Fallback conservador: ISO-8859-1 é o charset típico do portal
+    if not encoding:
+        encoding = "iso-8859-1"
+    
+    encoding = encoding.lower()
+    logger.info(f"Charset detectado: {encoding}")
+
+    try:
+        html = raw.decode(encoding, errors="replace")
+    except LookupError:
+        logger.warning(f"Charset '{encoding}' inválido; usando iso-8859-1")
+        html = raw.decode("iso-8859-1", errors="replace")
+
+    html_utf8 = _forcar_meta_utf8(html)
+    return html_utf8
+
+
+def _forcar_meta_utf8(html: str) -> str:
+    """Substitui qualquer meta charset declarado para UTF-8."""
+
+    atualizado = _META_CHARSET_RE.sub(r"\1utf-8\3", html)
+    atualizado = _META_HTTP_EQUIV_RE.sub(r"\1utf-8\3", atualizado)
+
+    # Se não havia meta charset, podemos opcionalmente inserir um. Para evitar
+    # interferir no layout, deixamos como está; o arquivo será salvo em UTF-8 de
+    # qualquer forma.
+    return atualizado
+
+
+def _ler_html_arquivo(path: Path) -> str:
+    """Lê HTML de arquivo, detectando encoding correto.
+    
+    Arquivos antigos podem ter sido salvos com encoding errado (bytes ISO-8859-1
+    com declaração UTF-8). Aqui tentamos ler como UTF-8 primeiro, mas se
+    encontrarmos caracteres de substituição (U+FFFD / �), re-lemos os bytes
+    brutos como ISO-8859-1.
+    """
+    raw = path.read_bytes()
+    
+    # Tenta UTF-8 primeiro (padrão moderno)
+    try:
+        html = raw.decode("utf-8")
+        # Se encontrou caracteres de substituição, arquivo foi salvo com encoding errado
+        if "\ufffd" in html or "�" in html:
+            logger.info(f"Arquivo {path.name} contém caracteres corrompidos; tentando ISO-8859-1")
+            html = raw.decode("iso-8859-1", errors="replace")
+    except UnicodeDecodeError:
+        # Arquivo não é UTF-8 válido, tenta ISO-8859-1
+        logger.info(f"Arquivo {path.name} não é UTF-8 válido; usando ISO-8859-1")
+        html = raw.decode("iso-8859-1", errors="replace")
+    
+    return html
 
 
 def parse_nota(html: str, chave: str) -> NotaFiscal:
