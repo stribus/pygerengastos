@@ -1,14 +1,14 @@
 [project]
 name = "gerenciador-de-despesa"
 version = "0.1.0"
-description = "Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e) do portal da Receita Gaúcha, classifica itens automaticamente via LiteLLM/Gemini e armazena tudo em DuckDB para visualização dos gastos."
+description = "Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e) do portal da Receita Gaúcha, classifica itens automaticamente via LiteLLM/Gemini e armazena tudo em SQLite3 para visualização dos gastos."
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [
     { name = "stribus", email = "seu-email@exemplo.com" }
 ]
 license = { text = "MIT" }
-keywords = ["nfc-e", "gerenciamento", "despesas", "streamlit", "duckdb", "gemini", "classificacao-automatica"]
+keywords = ["nfc-e", "gerenciamento", "despesas", "streamlit", "SQLite3", "gemini", "classificacao-automatica"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",

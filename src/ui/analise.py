@@ -198,7 +198,7 @@ def render_pagina_analise() -> None:
             return
 
         if confirmar:
-            st.success("Ajustes confirmados e persistidos no DuckDB.")
+            st.success("Ajustes confirmados e persistidos no SQLite3.")
         else:
             st.info("Rascunho salvo. Confirme quando finalizar a revisão.")
 

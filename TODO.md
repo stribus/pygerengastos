@@ -3,7 +3,7 @@
 ## Objetivo geral
 
 - Construir o sistema completo de importação, classificação (usando LiteLLM + Gemini) e visualização das notas fiscais.
-- Garantir que os dados fiquem armazenados em DuckDB e que a interface Streamlit permita monitoramento dos gastos mensais.
+- Garantir que os dados fiquem armazenados em SQLite3 e que a interface Streamlit permita monitoramento dos gastos mensais.
 
 ## Status atual
 
@@ -46,7 +46,7 @@
 - [ ] **Infra e testes**
   - [x] Estruturar pastas (`src/`, `data/`, `tests`).
   - [x] Criar fixtures e testes para o scraper.
-  - [x] Adicionar testes para classificação e consultas DuckDB.
+  - [x] Adicionar testes para classificação e consultas SQLite3.
   - [x] Cobrir busca semântica de embeddings com mock do Chroma.
 
 ## Observações futuras

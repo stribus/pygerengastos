@@ -9,7 +9,7 @@ trigger: always_on
 Este é um sistema de gerenciamento de despesas mensais em Python que:
 1. Extrai dados de notas fiscais do site da Receita Gaúcha (`https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx`)
 2. Classifica automaticamente os itens usando IA via LiteLLM (modelos Gemini)
-3. Armazena dados no DuckDB para análise
+3. Armazena dados no SQLite3 para análise
 4. Apresenta interface web com Streamlit
 
 ## Stack Tecnológico
@@ -17,7 +17,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 - **Frontend**: Streamlit (interface web)
 - **Backend**: Python 3.13.1
 - **IA/ML**: LiteLLM com modelos Gemini (`gemini/gemini-2.5-pro`) para classificação de itens
-- **Banco de Dados**: DuckDB
+- **Banco de Dados**: SQLite3
 - **Web Scraping**: Para extração de dados da Receita Gaúcha
 - **Ambiente**: Virtual environment com `uv` (Python package manager)(`uv pip`, `uv venv`,`uv run`,`uv add`, etc.)
 - **ambeiente virtual**: `.venv`, verifique sempre estar com o ambiente ativo, use `.\.venv\Scripts\Activate.ps1` no powershell
@@ -69,7 +69,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que:
 uv pip install -r requirements.txt
 
 # OU instalar pacotes individuais
-uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
+uv add streamlit SQLite3 httpx beautifulsoup4 pytest python-dotenv
 ```
 
 ### ⚠️ IMPORTANTE: Gerenciamento de Pacotes
@@ -84,9 +84,9 @@ uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
 ├── src/
 │   ├── scrapers/           # Módulos para extração de dados
 │   ├── classifiers/        # Integração com LiteLLM + Gemini
-│   ├── database/           # Operações DuckDB
+│   ├── database/           # Operações SQLite3
 │   └── ui/                 # Componentes Streamlit
-├── data/                   # Banco DuckDB e arquivos temporários
+├── data/                   # Banco SQLite3 e arquivos temporários
 └── tests/                  # Testes unitários
 ```
 
@@ -119,7 +119,7 @@ uv pip install streamlit duckdb httpx beautifulsoup4 pytest python-dotenv
 
 ## Considerações de Performance
 
-- Use DuckDB para consultas analíticas rápidas
+- Use SQLite3 para consultas analíticas rápidas
 - Cache classificações de IA para evitar custos desnecessários  
 - Implemente paginação para listas de notas fiscais
-- Otimize queries com índices apropriados no DuckDB
+- Otimize queries com índices apropriados no SQLite3

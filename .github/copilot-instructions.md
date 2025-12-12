@@ -33,7 +33,7 @@ O sistema usa **classificação semântica prioritária** com fallback para LLM:
    - Retorna: categoria + confiança + produto_nome + produto_marca + justificativa
    - Origem: `gemini-litellm`
 
-3. **Persistência Automática**: Ambos os fluxos atualizam DuckDB e registram embeddings via `_registrar_alias_produto()`
+3. **Persistência Automática**: Ambos os fluxos atualizam SQLite3 e registram embeddings via `_registrar_alias_produto()`
 
 **Exemplo de implementação**: Ver `src/classifiers/__init__.py::classificar_itens_pendentes()` e testes em `tests/test_semantic_integration.py`
 

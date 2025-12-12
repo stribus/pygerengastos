@@ -33,11 +33,13 @@ $itemsToCopy = @(
 	"main.py",
 	"requirements.txt",
 	"README.md",
+	"INSTALL.md",
 	"src",
 	"data",
 	"debug_product_update.py",
 	"verify_logging.py",
-	"verify_seeding.py"
+	"verify_seeding.py",
+	".env.example"
 )
 
 foreach ($item in $itemsToCopy) {
