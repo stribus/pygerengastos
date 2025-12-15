@@ -61,27 +61,26 @@ def classificar_itens_pendentes(
 		matches = buscar_produtos_semelhantes(item.descricao, top_k=1)
 		match = matches[0] if matches else None
 
-		# Se encontrou algo com alta confiança (> 0.82)
+		# Se encontrou algo com alta confiança (>= 0.82)
 		if match and (match.get("score") or 0.0) >= 0.82:
-			produto_id = match.get("produto_id")
-			if produto_id:
-				categoria = obter_categoria_de_produto(int(produto_id), db_path=db_path)
-				if categoria:
-					logger.debug(f"Match semântico encontrado para '{item.descricao}': {categoria} (score: {match.get('score')})")
-					resultados_finais.append(
-						ClassificacaoResultado(
-							chave_acesso=item.chave_acesso,
-							sequencia=item.sequencia,
-							categoria=categoria,
-							confianca=match.get("score"),
-							origem="chroma-cache",
-							modelo="all-MiniLM-L6-v2",
-							observacoes=f"Match semântico com produto {produto_id}",
-							produto_nome=match.get("nome_base"),
-							produto_marca=match.get("marca_base"),
-						)
+			categoria = match.get("categoria")
+			# Só usa se categoria estiver preenchida
+			if categoria and categoria.strip():
+				logger.debug(f"Match semântico encontrado para '{item.descricao}': {categoria} (score: {match.get('score')})")
+				resultados_finais.append(
+					ClassificacaoResultado(
+						chave_acesso=item.chave_acesso,
+						sequencia=item.sequencia,
+						categoria=categoria,
+						confianca=match.get("score"),
+						origem="chroma-cache",
+						modelo="all-MiniLM-L6-v2",
+						observacoes=f"Match semântico com descrição: {match.get('descricao_original', '')}",
+						produto_nome=match.get("nome_base"),
+						produto_marca=match.get("marca_base"),
 					)
-					continue
+				)
+				continue
 
 		# Se não encontrou ou confiança baixa, vai para o LLM
 		itens_para_llm.append(item)

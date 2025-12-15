@@ -71,8 +71,40 @@ def gerar_embedding(texto: str) -> List[float]:
 
 
 def upsert_produto_embedding(produto_id: int, descricao: str, nome_base: str | None = None, marca_base: str | None = None) -> None:
-    texto = descricao.strip()
+    """DEPRECATED: Usar upsert_descricao_embedding() ao invés desta função.
+    
+    Mantida apenas para compatibilidade com código legado.
+    """
+    upsert_descricao_embedding(
+        descricao_original=descricao,
+        nome_base=nome_base or "",
+        marca_base=marca_base,
+        categoria=None,
+        produto_id=produto_id
+    )
+
+
+def upsert_descricao_embedding(
+    descricao_original: str,
+    nome_base: str,
+    marca_base: str | None = None,
+    categoria: str | None = None,
+    produto_id: int | None = None
+) -> None:
+    """Indexa uma descrição original com seus dados padronizados.
+    
+    Args:
+        descricao_original: Texto original da nota fiscal (ex: "CR LEITE PIRAC ZERO LAC 200G")
+        nome_base: Nome padronizado do produto (ex: "Creme Leite Zero Lactose")
+        marca_base: Marca do produto (ex: "Piracanjuba")
+        categoria: Categoria validada (ex: "Laticínios e Frios")
+        produto_id: ID opcional do produto na tabela produtos
+    """
+    texto = descricao_original.strip()
     if not texto:
+        return
+    
+    if not nome_base or not nome_base.strip():
         return
 
     collection = _get_collection()
@@ -80,14 +112,21 @@ def upsert_produto_embedding(produto_id: int, descricao: str, nome_base: str | N
     if not embedding:
         return
 
+    # Usa hash da descrição normalizada como ID único
+    import hashlib
+    descricao_normalizada = texto.upper().strip()
+    doc_id = hashlib.md5(descricao_normalizada.encode('utf-8')).hexdigest()
+
     metadata: Dict[str, Any] = {
-        "produto_id": str(produto_id),
-        "nome_base": nome_base or "",
-        "marca_base": marca_base or "",
+        "descricao_original": texto,
+        "nome_base": nome_base.strip(),
+        "marca_base": marca_base.strip() if marca_base else "",
+        "categoria": categoria.strip() if categoria else "",
+        "produto_id": str(produto_id) if produto_id else "",
     }
 
     collection.upsert(
-        ids=[str(produto_id)],
+        ids=[doc_id],
         metadatas=[metadata],
         documents=[texto],
         embeddings=[embedding],
@@ -95,6 +134,16 @@ def upsert_produto_embedding(produto_id: int, descricao: str, nome_base: str | N
 
 
 def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str, Any]]:
+    """Busca descrições similares já processadas anteriormente.
+    
+    Retorna lista com:
+        - descricao_original: Texto original indexado
+        - nome_base: Nome padronizado do produto
+        - marca_base: Marca do produto
+        - categoria: Categoria validada
+        - produto_id: ID do produto (se disponível)
+        - score: Similaridade (0.0 a 1.0)
+    """
     texto = descricao.strip()
     if not texto:
         return []
@@ -116,10 +165,22 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
     linha_metadatas = metadatas[0] if metadatas and metadatas[0] else [{} for _ in linha_distancias]
     for distancia, metadata in zip(linha_distancias, linha_metadatas):
         similaridade = max(0.0, 1.0 - distancia)
+        
+        # Extrai produto_id (pode ser string vazia)
+        produto_id_str = metadata.get("produto_id", "")
+        produto_id = None
+        if produto_id_str and produto_id_str.strip():
+            try:
+                produto_id = int(produto_id_str)
+            except (ValueError, TypeError):
+                pass
+        
         similaridades.append({
-            "produto_id": int(metadata.get("produto_id", 0)),
+            "descricao_original": metadata.get("descricao_original", ""),
             "nome_base": metadata.get("nome_base", ""),
             "marca_base": metadata.get("marca_base", ""),
+            "categoria": metadata.get("categoria", ""),
+            "produto_id": produto_id,
             "score": similaridade,
         })
     return similaridades

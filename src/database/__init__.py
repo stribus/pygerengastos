@@ -1148,6 +1148,10 @@ def registrar_classificacao_itens(
 				con.execute(sql_update, params)
 
 			con.execute("COMMIT")
+			
+			# Atualizar embeddings após classificação (LLM ou cache semântico)
+			_atualizar_embeddings_pos_classificacao(dados, con)
+			
 		except Exception:
 			con.execute("ROLLBACK")
 			raise
@@ -1218,6 +1222,10 @@ def registrar_revisoes_manuais(
 		return
 
 	registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
+
+	# Atualizar embeddings quando o usuário confirma manualmente
+	if confirmar:
+		_atualizar_embeddings_pos_validacao(itens_para_classificar, db_path=db_path)
 
 	with conexao(db_path) as con:
 		for log in logs:
@@ -1589,6 +1597,122 @@ def _registrar_embeddings_para_produto(produto: ProdutoPadronizado) -> None:
 	except Exception:
 		# Logar erro silenciosamente ou warning
 		pass
+
+
+def _atualizar_embeddings_pos_validacao(
+	itens_validados: Sequence[Mapping[str, Any]],
+	*,
+	db_path: Path | str | None = None
+) -> None:
+	"""Atualiza embeddings no ChromaDB após validação manual do usuário.
+	
+	Para cada item validado, indexa a descrição original com:
+	- nome_base (produto validado)
+	- marca_base (marca validada)
+	- categoria (categoria validada)
+	"""
+	try:
+		from src.classifiers.embeddings import upsert_descricao_embedding
+	except ImportError:
+		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
+		return
+	
+	with conexao(db_path) as con:
+		for item in itens_validados:
+			chave = item.get("chave_acesso")
+			seq = item.get("sequencia")
+			
+			if not chave or seq is None:
+				continue
+			
+			# Busca descrição original do item
+			row = con.execute(
+				"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+				[chave, seq]
+			).fetchone()
+			
+			if not row or not row[0]:
+				continue
+			
+			descricao_original = row[0]
+			produto_nome = item.get("produto_nome")
+			produto_marca = item.get("produto_marca")
+			categoria = item.get("categoria")
+			
+			# Só atualiza se tiver pelo menos nome e categoria
+			if not produto_nome or not categoria:
+				continue
+			
+			try:
+				upsert_descricao_embedding(
+					descricao_original=descricao_original,
+					nome_base=produto_nome,
+					marca_base=produto_marca,
+					categoria=categoria,
+					produto_id=None  # Não precisamos do produto_id aqui
+				)
+				logger.debug(
+					f"Embedding atualizado para '{descricao_original}': "
+					f"{produto_nome} ({produto_marca}) - {categoria}"
+				)
+			except Exception as e:
+				logger.warning(f"Erro ao atualizar embedding para '{descricao_original}': {e}")
+				continue
+
+
+def _atualizar_embeddings_pos_classificacao(
+	dados_classificacao: Sequence[Mapping[str, Any]],
+	con: sqlite3.Connection
+) -> None:
+	"""Atualiza embeddings após classificação automática (LLM ou cache).
+	
+	Registra descrições originais com suas classificações para reutilização futura.
+	"""
+	try:
+		from src.classifiers.embeddings import upsert_descricao_embedding
+	except ImportError:
+		return
+	
+	for item in dados_classificacao:
+		chave = item.get("chave_acesso")
+		seq = item.get("sequencia")
+		
+		if not chave or seq is None:
+			continue
+		
+		# Busca descrição original
+		row = con.execute(
+			"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+			[chave, seq]
+		).fetchone()
+		
+		if not row or not row[0]:
+			continue
+		
+		descricao_original = row[0]
+		produto_nome = item.get("produto_nome")
+		categoria = item.get("categoria")
+		produto_marca = item.get("produto_marca")
+		
+		# Só registra se tiver nome e categoria (classificação completa)
+		if not produto_nome or not categoria:
+			continue
+		
+		try:
+			upsert_descricao_embedding(
+				descricao_original=descricao_original,
+				nome_base=produto_nome,
+				marca_base=produto_marca,
+				categoria=categoria,
+				produto_id=None
+			)
+			logger.debug(
+				f"Embedding registrado após classificação: '{descricao_original}' -> "
+				f"{produto_nome} ({produto_marca}) - {categoria}"
+			)
+		except Exception as e:
+			logger.warning(f"Erro ao registrar embedding para '{descricao_original}': {e}")
+			continue
 
 
 def _converter_data_iso_e_data(texto: str | None) -> tuple[str | None, str | None]:
