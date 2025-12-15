@@ -1,0 +1,20 @@
+{
+  "configurations": [
+
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "name": "Launch Streamlit App",
+      "module": "streamlit",
+      "args": [
+        "run",
+        "${workspaceFolder}/main.py",
+        "--server.runOnSave",
+        "true"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env"
+    }
+  ]
+}
