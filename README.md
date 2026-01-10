@@ -38,11 +38,21 @@ Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e)
 
 No PowerShell, use a virtualenv local e instale as dependências com o `uv pip`:
 
-    python -m venv .venv
+```pwsh
+    uv venv
     .\.venv\Scripts\Activate.ps1
     uv pip install -r requirements.txt
+```
 
 Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação ou os testes.
+
+## Rodando
+
+```pwsh
+
+    .\.venv\script\activate.ps1
+    streamlit run .\main.py 
+```
 
 ## Fluxo atual de importação
 
