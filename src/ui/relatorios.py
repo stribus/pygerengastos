@@ -11,6 +11,7 @@ import streamlit as st
 
 from src.database import (
     obter_custos_unitarios_mensais,
+    obter_quantidades_mensais_produtos,
     obter_top_produtos_por_quantidade,
     obter_unidades_produtos,
 )
@@ -514,6 +515,96 @@ def render_grafico_inflacao() -> None:
             }),
             use_container_width=True,
         )
+    
+    # Mostrar composição da Cesta Básica Personalizada
+    if mostrar_cesta and produtos_regulares:
+        st.write("---")
+        st.subheader("🛒 Composição da Cesta Básica Personalizada")
+        st.write(
+            "Esta tabela mostra os produtos que compõem sua cesta básica personalizada "
+            "(produtos regulares comprados em meses consecutivos) e as quantidades médias mensais."
+        )
+        
+        # Buscar quantidades mensais dos produtos regulares
+        quantidades = obter_quantidades_mensais_produtos(
+            produtos_regulares,
+            data_inicio=data_inicio.isoformat(),
+            data_fim=data_fim.isoformat(),
+        )
+        
+        if quantidades:
+            # Calcular média mensal por produto
+            df_qtd = pd.DataFrame(quantidades)
+            media_mensal = df_qtd.groupby("produto_nome").agg({
+                "quantidade_total": "mean"
+            }).reset_index()
+            media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
+            
+            # Adicionar unidades
+            media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
+            
+            # Adicionar preço médio no período
+            df_precos = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
+            preco_medio = df_precos.groupby("produto_nome").agg({
+                "custo_unitario_medio": "mean"
+            }).reset_index()
+            preco_medio.columns = ["Produto", "Preço Médio"]
+            
+            # Juntar informações
+            tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
+            
+            # Calcular custo médio mensal
+            tabela_cesta["Custo Mensal Médio"] = (
+                tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
+            )
+            
+            # Reordenar colunas
+            tabela_cesta = tabela_cesta[[
+                "Produto",
+                "Unidade",
+                "Quantidade Média Mensal",
+                "Preço Médio",
+                "Custo Mensal Médio"
+            ]]
+            
+            # Adicionar linha de total
+            total_custo = tabela_cesta["Custo Mensal Médio"].sum()
+            
+            # Exibir tabela
+            st.dataframe(
+                tabela_cesta.style.format({
+                    "Quantidade Média Mensal": "{:.2f}",
+                    "Preço Médio": "R$ {:.2f}",
+                    "Custo Mensal Médio": "R$ {:.2f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+            
+            st.metric(
+                "💰 Custo Total Médio Mensal da Cesta",
+                f"R$ {total_custo:.2f}",
+                help="Soma dos custos mensais médios de todos os produtos da cesta"
+            )
+            
+            # Explicação adicional
+            with st.expander("ℹ️ Como é calculada a cesta básica?"):
+                st.markdown("""
+                **Produtos incluídos:** Apenas produtos regulares (⭐), ou seja, aqueles 
+                comprados em pelo menos 2 meses consecutivos no período selecionado.
+                
+                **Quantidade Média Mensal:** Média de quantidade comprada por mês para cada produto.
+                
+                **Preço Médio:** Preço unitário médio do produto no período.
+                
+                **Custo Mensal Médio:** Quantidade média × Preço médio.
+                
+                **Inflação da Cesta:** Calculada sobre a média dos custos unitários de todos 
+                os produtos regulares mês a mês, mostrando como o custo total da sua cesta 
+                evolui ao longo do tempo.
+                """)
+        else:
+            st.info("Não há dados de quantidade disponíveis para os produtos da cesta.")
 
 
 def render_pagina_relatorios() -> None:

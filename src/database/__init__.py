@@ -2187,3 +2187,59 @@ def obter_unidades_produtos(
 			unidades[produto] = unidade
 	
 	return unidades
+
+
+def obter_quantidades_mensais_produtos(
+	produtos: list[str],
+	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
+	db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+	"""Retorna quantidades compradas mensalmente para uma lista de produtos.
+	
+	Para cada produto e mês, retorna a quantidade total comprada.
+	Retorna lista com: produto_nome, ano_mes, quantidade_total.
+	"""
+	if not produtos:
+		return []
+	
+	filtros = ["i.produto_nome IN ({})".format(",".join("?" * len(produtos)))]
+	params: list[object] = list(produtos)
+	
+	filtros.append("n.emissao_data IS NOT NULL")
+	filtros.append("i.quantidade IS NOT NULL")
+	filtros.append("i.quantidade > 0")
+	
+	if data_inicio:
+		filtros.append("n.emissao_data >= ?")
+		params.append(data_inicio)
+	if data_fim:
+		filtros.append("n.emissao_data <= ?")
+		params.append(data_fim)
+	
+	where_clause = " AND ".join(filtros)
+	
+	query = f"""
+		SELECT
+			i.produto_nome,
+			strftime('%Y-%m', n.emissao_data) as ano_mes,
+			SUM(i.quantidade) as quantidade_total
+		FROM itens i
+		JOIN notas n ON n.chave_acesso = i.chave_acesso
+		WHERE {where_clause}
+		GROUP BY i.produto_nome, ano_mes
+		ORDER BY i.produto_nome, ano_mes
+	"""
+	
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+	
+	return [
+		{
+			"produto_nome": row[0],
+			"ano_mes": row[1],
+			"quantidade_total": float(_para_decimal(row[2]) or Decimal("0"))
+		}
+		for row in rows
+	]
