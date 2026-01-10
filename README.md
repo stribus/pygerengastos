@@ -9,13 +9,18 @@ Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e)
 - ✅ Persistência em SQLite3 com dimensões de datas/estabelecimentos e funções utilitárias para salvar/consultar.
 - ✅ Tela de revisão manual em Streamlit com edição de categoria/produto, registro do revisor e histórico em SQLite3.
 - ✅ Migração de DuckDB para SQLite3 para melhor suporte a UPDATE com foreign keys.
-- 🚧 Próximos focos: normalizar consultas de resumo mensais e evoluir os dashboards Streamlit.
+- ✅ **Relatórios e gráficos interativos** - Acompanhe evolução de preços e inflação da sua cesta básica pessoal (veja [RELATORIOS.md](RELATORIOS.md))
 
-## interfaces
+## Interfaces
 
-    - interface de importação de notas, oferece interface pra digitar a chave da nota fiscal pra importação
-    - interface pra visualização das notas importadas junto dos items
-    - interface com graficos das despesas, com graficos mensais de gastos do mes ou dos custos por itens
+- **Home**: Dashboard com KPIs gerais e resumo mensal
+- **Importar nota**: Interface para digitar chave da nota fiscal e importar do portal da SEFAZ-RS
+- **Analisar notas**: Visualização de notas importadas com revisão manual de classificações
+- **Relatórios** 📊 (NOVO):
+  - Gráfico de custos unitários mensais dos 10 produtos mais comprados
+  - Gráfico de inflação acumulada com identificação de produtos regulares
+  - Cálculo de "Inflação Média" e "Cesta Básica Personalizada"
+  - Exportação para Excel/CSV com valores e percentuais
 
 ## Estrutura do projeto
 
