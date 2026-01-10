@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -154,9 +153,11 @@ def _calcular_cesta_basica_personalizada(
     df_completo: pd.DataFrame,
     produtos_regulares: list[str],
 ) -> pd.DataFrame:
-    """Calcula custo médio mensal ponderado pela quantidade média de compra.
+    """Calcula custo médio mensal da cesta a partir da média simples dos custos unitários.
     
-    Retorna DataFrame com: ano_mes, custo_cesta (valor médio ponderado).
+    Atualmente não há ponderação por quantidade: assume-se quantidade = 1 para todos
+    os produtos regulares em cada mês. Retorna DataFrame com: ano_mes, custo_cesta
+    (valor médio simples dos custos unitários).
     """
     # Filtrar apenas produtos regulares
     df_regulares = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
@@ -484,17 +485,43 @@ def render_grafico_inflacao() -> None:
         df_produto = df_completo[df_completo["produto_nome"] == produto].sort_values("ano_mes")
         if not df_produto.empty:
             unidade = unidades.get(produto, "UN")
-            # Valores unitários
-            df_export[f"{produto} - Preço ({unidade})"] = df_produto["custo_unitario_medio"].tolist()
-            # Inflação acumulada
+            # Valores unitários: alinhar explicitamente por mês para evitar diferenças de tamanho
+            serie_precos = (
+                df_produto.set_index("ano_mes")["custo_unitario_medio"]
+                .reindex(meses_ordenados)
+            )
+            df_export[f"{produto} - Preço ({unidade})"] = serie_precos.tolist()
+            
+            # Inflação acumulada: garantir que o comprimento case com meses_ordenados
             if produto in inflacao_por_produto:
-                df_export[f"{produto} - Inflação (%)"] = inflacao_por_produto[produto]
+                valores_inflacao = list(inflacao_por_produto[produto])
+                if len(valores_inflacao) < len(meses_ordenados):
+                    # Preenche meses faltantes com None para evitar ValueError
+                    valores_inflacao.extend([None] * (len(meses_ordenados) - len(valores_inflacao)))
+                elif len(valores_inflacao) > len(meses_ordenados):
+                    # Em caso de sobra, truncar para o mesmo comprimento
+                    valores_inflacao = valores_inflacao[:len(meses_ordenados)]
+                df_export[f"{produto} - Inflação (%)"] = valores_inflacao
     
     # Adicionar inflação média e cesta
     df_export["Inflação Média (%)"] = inflacao_media
     if not df_cesta.empty:
-        df_export["Cesta Básica - Custo (R$)"] = df_cesta["custo_cesta"].tolist()
-        df_export["Cesta Básica - Inflação (%)"] = inflacao_cesta
+        # Garantir que o custo da cesta tenha exatamente os mesmos meses de df_export
+        serie_custo_cesta = (
+            df_cesta.set_index("ano_mes")["custo_cesta"]
+            .reindex(meses_ordenados)
+        )
+        df_export["Cesta Básica - Custo (R$)"] = serie_custo_cesta.tolist()
+        
+        # Garantir que a inflação da cesta tenha o mesmo comprimento que meses_ordenados
+        if len(inflacao_cesta) < len(meses_ordenados):
+            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else None
+            inflacao_alinhada = inflacao_cesta + [
+                ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
+            ]
+        else:
+            inflacao_alinhada = inflacao_cesta[:len(meses_ordenados)]
+        df_export["Cesta Básica - Inflação (%)"] = inflacao_alinhada
     
     # Converter para CSV para download
     csv = df_export.to_csv(index=False, encoding="utf-8-sig", sep=";", decimal=",")

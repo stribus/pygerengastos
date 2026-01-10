@@ -2,10 +2,9 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 import random
 
-from src.database import conexao, salvar_nota, registrar_classificacao_itens, seed_categorias_csv
+from src.database import salvar_nota, registrar_classificacao_itens, seed_categorias_csv
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 
 

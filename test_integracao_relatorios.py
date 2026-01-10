@@ -5,7 +5,6 @@ Valida todo o fluxo desde a consulta SQL até os cálculos de inflação.
 """
 
 from datetime import datetime, timedelta
-from decimal import Decimal
 
 from src.database import (
     conexao,
