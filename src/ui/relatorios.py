@@ -300,7 +300,7 @@ def render_grafico_custos_unitarios() -> None:
         )
         st.dataframe(
             df_exibicao.style.format("{:.2f}"),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -551,7 +551,7 @@ def render_grafico_inflacao() -> None:
             df_export.style.format({
                 col: "{:.2f}" for col in df_export.columns if col != "Mês"
             }),
-            use_container_width=True,
+            width='stretch',
         )
 
     # Mostrar composição da Cesta Básica Personalizada
@@ -615,7 +615,7 @@ def render_grafico_inflacao() -> None:
                     "Preço Médio": "R$ {:.2f}",
                     "Custo Mensal Médio": "R$ {:.2f}",
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
 
