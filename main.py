@@ -4,7 +4,7 @@ import streamlit as st
 import traceback
 
 from src.database import inicializar_banco, seed_categorias_csv
-from src.ui import render_pagina_analise, render_pagina_importacao
+from src.ui import render_pagina_analise, render_pagina_importacao, render_pagina_relatorios
 from src.ui.home import render_home
 from src.logger import setup_logging
 
@@ -28,7 +28,7 @@ def main() -> None:
 				return
 
 		st.sidebar.title("Navegação")
-		paginas = ("Home", "Importar nota", "Analisar notas")
+		paginas = ("Home", "Importar nota", "Analisar notas", "Relatórios")
 		if "menu_navegacao" not in st.session_state:
 			st.session_state["menu_navegacao"] = paginas[0]
 		proximo_menu = st.session_state.pop("redirecionar_menu", None)
@@ -45,8 +45,10 @@ def main() -> None:
 			render_home()
 		elif opcao == "Importar nota":
 			render_pagina_importacao()
-		else:
+		elif opcao == "Analisar notas":
 			render_pagina_analise()
+		elif opcao == "Relatórios":
+			render_pagina_relatorios()
 	
 	except Exception as e:
 		logger.exception(f"Erro crítico na aplicação: {e}\n{traceback.format_exc()}")
