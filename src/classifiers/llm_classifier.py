@@ -6,11 +6,10 @@ from pathlib import Path
 from importlib import import_module
 from typing import Any, Callable, Iterable, Sequence, cast
 import json
-import logging
 import os
 import textwrap
 
-from litellm import completion
+from litellm.router import Router
 
 from src.database import ItemParaClassificacao
 from src.logger import setup_logging
@@ -25,6 +24,75 @@ _ENV_LOADED = False
 
 
 @dataclass(frozen=True)
+class ModeloConfig:
+	nome: str
+	api_key_env: str
+	max_tokens: int
+	max_itens: int
+	timeout: float
+
+
+DEFAULT_MODELOS = [
+	ModeloConfig(
+		nome="gemini/gemini-2.5-flash-lite",
+		api_key_env="GEMINI_API_KEY",
+		max_tokens=DEFAULT_MAX_TOKENS,
+		max_itens=MAX_ITENS_POR_CHAMADA,
+		timeout=30.0,
+	),
+	ModeloConfig(
+		nome="nvidia_nim/meta/llama3-70b-instruct",
+		api_key_env="NVIDIA_API_KEY",
+		max_tokens=4096,
+		max_itens=20,
+		timeout=45.0,
+	),
+	ModeloConfig(
+		nome="nvidia_nim/moonshotai/kimi-k2.5",
+		api_key_env="NVIDIA_API_KEY",
+		max_tokens=8192,
+		max_itens=25,
+		timeout=45.0,
+	),
+	ModeloConfig(
+		nome="openai/gpt-4o",
+		api_key_env="OPENAI_API_KEY",
+		max_tokens=4096,
+		max_itens=30,
+		timeout=30.0,
+	),
+]
+
+
+@dataclass
+class FalhaModelo:
+	modelo: str
+	motivo: str
+
+
+class RespostaLLMInvalidaError(ValueError):
+	"""Erro ao interpretar JSON retornado pelo LLM."""
+
+
+class FalhaModeloError(RuntimeError):
+	"""Erro ao classificar com um modelo específico."""
+
+	def __init__(
+		self,
+		*,
+		modelo: str,
+		motivo: str,
+		itens_restantes: list[ItemParaClassificacao],
+		causa: Exception | None = None,
+	):
+		super().__init__(motivo)
+		self.modelo = modelo
+		self.motivo = motivo
+		self.itens_restantes = itens_restantes
+		self.causa = causa
+
+
+@dataclass(frozen=True)
 class _RespostaLLM:
 	categoria: str
 	confianca: float | None = None
@@ -35,6 +103,49 @@ class _RespostaLLM:
 
 LoadDotenvCallable = Callable[..., bool]
 _LOAD_DOTENV_FUNC: LoadDotenvCallable | None = None
+
+
+def _normalizar_chave_modelo_env(nome_modelo: str) -> str:
+	texto = "".join((ch if ch.isalnum() else "_") for ch in nome_modelo)
+	return texto.upper()
+
+
+def _ler_int_env(nome: str, padrao: int) -> int:
+	valor = os.getenv(nome)
+	if not valor:
+		return padrao
+	try:
+		return int(valor)
+	except ValueError:
+		return padrao
+
+
+def _ler_float_env(nome: str, padrao: float) -> float:
+	valor = os.getenv(nome)
+	if not valor:
+		return padrao
+	try:
+		return float(valor)
+	except ValueError:
+		return padrao
+
+
+def _carregar_configs_modelo() -> dict[str, ModeloConfig]:
+	configs: dict[str, ModeloConfig] = {}
+	for modelo in DEFAULT_MODELOS:
+		chave_env = _normalizar_chave_modelo_env(modelo.nome)
+		api_key_env = os.getenv(f"LLM_MODEL_{chave_env}_API_KEY_ENV", modelo.api_key_env)
+		max_tokens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_TOKENS", modelo.max_tokens)
+		max_itens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_ITENS", modelo.max_itens)
+		timeout = _ler_float_env(f"LLM_MODEL_{chave_env}_TIMEOUT", modelo.timeout)
+		configs[modelo.nome] = ModeloConfig(
+			nome=modelo.nome,
+			api_key_env=api_key_env,
+			max_tokens=max_tokens,
+			max_itens=max_itens,
+			timeout=timeout,
+		)
+	return configs
 
 
 def _get_load_dotenv() -> LoadDotenvCallable:
@@ -81,33 +192,167 @@ class LLMClassifier:
 		max_tokens: int = DEFAULT_MAX_TOKENS,
 		timeout: float = 30.0,
 		categorias: Sequence[str] | None = None,
+		model_priority: Sequence[str] | None = None,
 	):
 		self._ensure_env()
-		self.api_key = api_key or os.getenv("GEMINI_API_KEY") 
-		if not self.api_key:
-			raise RuntimeError("Configure a variável GEMINI_API_KEY no ambiente ou arquivo .env")
 		self.model = model or DEFAULT_MODEL
 		self.temperature = temperature
 		self.max_tokens = max_tokens
 		self._timeout = timeout
 		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
+		self._model_priority = list(model_priority) if model_priority else [self.model]
+		self._model_configs = _carregar_configs_modelo()
+		self._api_key_override: dict[str, str] = {}
+		if api_key:
+			self._api_key_override[self.model] = api_key
+		self._router_cache: dict[str, Router] = {}
+		self._num_retries = _ler_int_env("LLM_NUM_RETRIES", 2)
 
 	def classificar_itens(
-		self, itens: Sequence[ItemParaClassificacao]
+		self,
+		itens: Sequence[ItemParaClassificacao],
+		*,
+		model_priority: Sequence[str] | None = None,
+		progress_callback: Callable[[str], None] | None = None,
 	) -> list[ClassificacaoResultado]:
 		if not itens:
 			return []
 
 		resultados: list[ClassificacaoResultado] = []
-		for indice_bloco, bloco in enumerate(_dividir_em_blocos(itens, MAX_ITENS_POR_CHAMADA), start=1):
-			payload = self._montar_payload(bloco)
-			conteudo, resposta_raw = self._executar_chamada(payload)
-			mapeamento = self._interpretar_resposta(conteudo)
-			if not mapeamento:
+		itens_pendentes = list(itens)
+		falhas: list[FalhaModelo] = []
+		limite_anterior: int | None = None
+
+		ordem_modelos = self._resolver_model_priority(model_priority)
+		if not ordem_modelos:
+			raise RuntimeError("Nenhum modelo configurado para classificação.")
+
+		for indice_modelo, modelo in enumerate(ordem_modelos):
+			config = self._obter_config_modelo(modelo)
+			api_key = self._obter_api_key(config)
+			if not api_key:
+				motivo = "api_key_ausente"
+				logger.warning("Modelo %s ignorado: %s", modelo, motivo)
+				falhas.append(FalhaModelo(modelo=modelo, motivo=motivo))
+				self._emitir_progresso(progress_callback, f"Modelo {modelo} ignorado: API key não configurada.")
 				continue
 
+			limite_em_uso = config.max_itens
+			if limite_anterior is not None:
+				limite_em_uso = min(limite_anterior, config.max_itens)
+				if config.max_itens < limite_anterior:
+					self._emitir_progresso(
+						progress_callback,
+						f"Modelo {modelo} usa lotes menores (até {config.max_itens} itens). Reagrupando...",
+					)
+
+			self._emitir_progresso(progress_callback, f"Tentando modelo {modelo}...")
+			self.model = config.nome
+			self.max_tokens = config.max_tokens
+			self._timeout = config.timeout
+
+			try:
+				resultados_modelo, itens_pendentes = self._classificar_com_modelo(
+					itens_pendentes,
+					config=config,
+					api_key=api_key,
+					max_itens=limite_em_uso,
+				)
+			except FalhaModeloError as exc:
+				falhas.append(FalhaModelo(modelo=exc.modelo, motivo=exc.motivo))
+				logger.warning(
+					"Falha ao classificar com %s: %s",
+					exc.modelo,
+					exc.motivo,
+					exc_info=True,
+				)
+				self._emitir_progresso(
+					progress_callback,
+					f"Falha com {exc.modelo}: {exc.motivo}. Tentando próximo modelo...",
+				)
+				itens_pendentes = exc.itens_restantes
+				limite_anterior = limite_em_uso
+				if indice_modelo == len(ordem_modelos) - 1 and exc.causa is not None:
+					raise exc.causa
+				continue
+
+			resultados.extend(resultados_modelo)
+			limite_anterior = limite_em_uso
+			if not itens_pendentes:
+				return resultados
+
+		if itens_pendentes:
+			resumo = "; ".join(f"{falha.modelo}={falha.motivo}" for falha in falhas)
+			if not resumo:
+				resumo = "nenhuma tentativa executada"
+			raise RuntimeError(
+				f"Falha ao classificar itens após tentar todos os modelos. {resumo}"
+			)
+
+		return resultados
+
+	def _resolver_model_priority(self, model_priority: Sequence[str] | None) -> list[str]:
+		if model_priority is not None:
+			return [modelo for modelo in model_priority if modelo]
+		if self._model_priority:
+			return list(self._model_priority)
+		return [self.model]
+
+	def _obter_config_modelo(self, modelo: str) -> ModeloConfig:
+		config = self._model_configs.get(modelo)
+		if config:
+			return config
+		return ModeloConfig(
+			nome=modelo,
+			api_key_env="GEMINI_API_KEY",
+			max_tokens=self.max_tokens,
+			max_itens=MAX_ITENS_POR_CHAMADA,
+			timeout=self._timeout,
+		)
+
+	def _obter_api_key(self, config: ModeloConfig) -> str | None:
+		if config.nome in self._api_key_override:
+			return self._api_key_override[config.nome]
+		return os.getenv(config.api_key_env)
+
+	def _emitir_progresso(self, callback: Callable[[str], None] | None, mensagem: str) -> None:
+		if callback:
+			callback(mensagem)
+
+	def _classificar_com_modelo(
+		self,
+		itens: Sequence[ItemParaClassificacao],
+		*,
+		config: ModeloConfig,
+		api_key: str,
+		max_itens: int,
+	) -> tuple[list[ClassificacaoResultado], list[ItemParaClassificacao]]:
+		lista_itens = list(itens)
+		if not lista_itens:
+			return [], []
+
+		resultados: list[ClassificacaoResultado] = []
+		for inicio in range(0, len(lista_itens), max_itens):
+			bloco = lista_itens[inicio : inicio + max_itens]
+			try:
+				payload = self._montar_payload(bloco)
+				conteudo, resposta_raw = self._executar_chamada(payload, config=config, api_key=api_key)
+				mapeamento = self._interpretar_resposta(conteudo)
+				if not mapeamento:
+					continue
+			except Exception as exc:  # pragma: no cover - comportamento coberto indiretamente
+				restantes = lista_itens[inicio:]
+				motivo = _resumir_erro(exc)
+				raise FalhaModeloError(
+					modelo=config.nome,
+					motivo=motivo,
+					itens_restantes=restantes,
+					causa=exc,
+				) from exc
+
 			resposta_json = json.dumps(
-				{"chunk": indice_bloco, "payload": payload, "resposta": resposta_raw}, ensure_ascii=False
+				{"chunk": (inicio // max_itens) + 1, "payload": payload, "resposta": resposta_raw},
+				ensure_ascii=False,
 			)
 
 			for item in bloco:
@@ -123,6 +368,7 @@ class LLMClassifier:
 						sequencia=item.sequencia,
 						categoria=categoria,
 						confianca=resposta.confianca,
+						origem=_definir_origem_modelo(self.model),
 						modelo=self.model,
 						observacoes=resposta.justificativa,
 						resposta_json=resposta_json,
@@ -131,21 +377,43 @@ class LLMClassifier:
 					)
 				)
 
-		return resultados
+		return resultados, []
 
-	def _executar_chamada(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-		logger.debug("Enviando payload para LiteLLM/Gemini: %s", json.dumps(payload, ensure_ascii=False))
+	def _obter_router(self, config: ModeloConfig, api_key: str) -> Router:
+		if config.nome in self._router_cache:
+			return self._router_cache[config.nome]
+		model_list = [
+			{
+				"model_name": config.nome,
+				"litellm_params": {
+					"model": config.nome,
+					"api_key": api_key,
+				},
+			}
+		]
+		router = Router(model_list=model_list, num_retries=self._num_retries)
+		self._router_cache[config.nome] = router
+		return router
+
+	def _executar_chamada(
+		self,
+		payload: dict[str, Any],
+		*,
+		config: ModeloConfig,
+		api_key: str,
+	) -> tuple[str, dict[str, Any]]:
+		logger.debug("Enviando payload para LiteLLM (%s): %s", config.nome, json.dumps(payload, ensure_ascii=False))
 		try:
-			response_obj = completion(
-				request_timeout=self._timeout,
-				api_key=self.api_key,
+			router = self._obter_router(config, api_key)
+			response_obj = router.completion(
+				request_timeout=config.timeout,
 				**cast(dict[str, Any], payload),
 			)
 		except Exception as exc:  # pragma: no cover - erro propagado para fluxo geral
-			logger.exception("Erro ao chamar LiteLLM/Gemini: %s", exc)
+			logger.exception("Erro ao chamar LiteLLM (%s): %s", config.nome, exc)
 			raise
 		json_data = _normalizar_resposta(response_obj)
-		logger.debug("Resposta do LiteLLM/Gemini: %s", json.dumps(json_data, ensure_ascii=False))
+		logger.debug("Resposta do LiteLLM (%s): %s", config.nome, json.dumps(json_data, ensure_ascii=False))
 		conteudo = _extrair_conteudo(json_data)
 		return conteudo, json_data
 
@@ -173,7 +441,7 @@ class LLMClassifier:
 
 				{categorias_texto}
 				INSTRUÇÕES:
-				1. Use as categorias disponíveis 
+				1. Use as categorias disponíveis
 				2. Extraia nome e marca base do produto quando possível
 				3. Seja objetivo nas justificativas (máx 5 palavras)
 				4. Responda APENAS com JSON válido
@@ -209,8 +477,12 @@ class LLMClassifier:
 		try:
 			dados = json.loads(_extrair_json_text(conteudo))
 		except json.JSONDecodeError as e:
-			logger.error("Resposta do LLM não pôde ser decodificada como JSON: \n %s \n\n erro: %s", conteudo, str(e))
-			return {}
+			logger.error(
+				"Resposta do LLM não pôde ser decodificada como JSON: \n %s \n\n erro: %s",
+				conteudo,
+				str(e),
+			)
+			raise RespostaLLMInvalidaError(str(e)) from e
 
 		itens_dados: Iterable[dict[str, object]]
 		if isinstance(dados, dict):
@@ -323,6 +595,23 @@ def _formatar_decimal(valor: Decimal | None) -> str:
 	if valor is None:
 		return "0.00"
 	return f"{valor:.2f}"
+
+
+def _resumir_erro(exc: Exception) -> str:
+	mensagem = str(exc) or exc.__class__.__name__
+	classe = exc.__class__.__name__
+	texto = f"{classe}: {mensagem}" if mensagem else classe
+	return texto[:300]
+
+
+def _definir_origem_modelo(modelo: str) -> str:
+	if modelo.startswith("gemini/"):
+		return "gemini-litellm"
+	if modelo.startswith("nvidia_nim/"):
+		return "nvidia-nim"
+	if modelo.startswith("openai/"):
+		return "openai-litellm"
+	return "litellm"
 
 
 def _dividir_em_blocos(

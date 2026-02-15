@@ -15,6 +15,66 @@ from src.database import (
     registrar_revisoes_manuais,
 )
 
+# Modelos de IA disponíveis
+MODELOS_IA = {
+    "Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
+    "LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
+    "Kimi K2.5 (Moonshot AI)": "nvidia_nim/moonshotai/kimi-k2.5",
+    "GPT-4o (OpenAI)": "openai/gpt-4o",
+}
+
+
+@st.dialog("Escolher modelo de IA")
+def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int) -> None:
+    """Diálogo para escolher qual modelo de IA usar para reprocessamento."""
+    st.write("Selecione qual IA deseja usar para classificar os itens pendentes:")
+
+    modelo_escolhido = st.radio(
+        "Modelo de IA",
+        options=list(MODELOS_IA.keys()),
+        index=0,
+        help="Cada modelo tem características diferentes de velocidade e precisão."
+    )
+
+    col1, col2 = st.columns(2)
+
+    if col1.button("Cancelar", use_container_width=True):
+        st.rerun()
+
+    if col2.button("Processar", type="primary", use_container_width=True):
+        modelo_selecionado = MODELOS_IA[modelo_escolhido]
+
+        try:
+            with st.spinner(f"Processando com {modelo_escolhido}..."):
+                resultados = classificar_itens_pendentes(
+                    limit=limite_classificacao,
+                    confirmar=False,
+                    chave_acesso=chave_acesso,
+                    model=modelo_selecionado,
+                )
+        except Exception as exc:
+            st.error(f"Erro ao processar: {exc}")
+            return
+
+        # Armazenar resultado em session_state
+        fila = st.session_state.setdefault("flash_analisar_msgs", [])
+        if resultados:
+            fila.append(
+                {
+                    "tipo": "success",
+                    "texto": f"{len(resultados)} item(ns) reprocessado(s) com {modelo_escolhido}.",
+                }
+            )
+        else:
+            fila.append(
+                {
+                    "tipo": "info",
+                    "texto": "Nenhum item pendente estava disponível para reprocessamento.",
+                }
+            )
+        st.session_state["nota_em_revisao"] = chave_acesso
+        st.rerun()
+
 
 def _formatar_rotulo(nota: NotaParaRevisao) -> str:
     data = (nota.emissao_iso or "")[:10] or "Sem data"
@@ -121,33 +181,8 @@ def render_pagina_analise() -> None:
 
     if botao_reprocessar and itens_pendentes_total > 0:
         limite_classificacao = max(itens_pendentes_total, len(itens), 1)
-        try:
-            with st.spinner("Reprocessando itens pendentes com a IA..."):
-                resultados = classificar_itens_pendentes(
-                    limit=limite_classificacao,
-                    confirmar=False,
-                    chave_acesso=nota.chave_acesso,
-                )
-        except Exception as exc:  # pragma: no cover - interação manual
-            st.error(f"Não foi possível reenviar os itens para a IA: {exc}")
-        else:
-            fila = st.session_state.setdefault("flash_analisar_msgs", [])
-            if resultados:
-                fila.append(
-                    {
-                        "tipo": "success",
-                        "texto": f"{len(resultados)} item(ns) reprocessado(s) automaticamente.",
-                    }
-                )
-            else:
-                fila.append(
-                    {
-                        "tipo": "info",
-                        "texto": "Nenhum item pendente estava disponível para reprocessamento.",
-                    }
-                )
-            st.session_state["nota_em_revisao"] = nota.chave_acesso
-            st.rerun()
+        # Abrir diálogo para escolher a IA
+        _dialogo_escolher_ia(nota.chave_acesso, limite_classificacao)
 
     with st.form(f"form_revisao_{nota.chave_acesso}"):
         st.write("Ajuste os campos necessários e escolha salvar rascunho ou confirmar.")
