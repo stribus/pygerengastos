@@ -205,7 +205,7 @@ def test_executar_chamada_passa_extra_body_para_litellm():
 		timeout=30.0,
 		extra_body={"chat_template_kwargs": {"thinking": False}}
 	)
-	
+
 	# Criar mock da resposta do litellm.completion com model_dump()
 	mock_response = MagicMock()
 	mock_response.model_dump.return_value = {
@@ -259,7 +259,7 @@ def test_executar_chamada_nao_passa_extra_body_quando_ausente():
 		timeout=30.0,
 		extra_body=None
 	)
-	
+
 	# Criar mock da resposta do litellm.completion com model_dump()
 	mock_response = MagicMock()
 	mock_response.model_dump.return_value = {
