@@ -64,6 +64,25 @@ DEFAULT_MODELOS = [
 ]
 
 
+# Mapeamento de nomes amigáveis para IDs de modelos
+_NOMES_AMIGAVEIS = {
+	"gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite (Padrão)",
+	"nvidia_nim/meta/llama3-70b-instruct": "LLaMA 3 70B (NVIDIA)",
+	"nvidia_nim/moonshotai/kimi-k2.5": "Kimi K2.5 (Moonshot AI)",
+	"openai/gpt-4o": "GPT-4o (OpenAI)",
+}
+
+
+def obter_modelos_disponiveis() -> list[str]:
+	"""Retorna a lista de IDs de modelos disponíveis."""
+	return [modelo.nome for modelo in DEFAULT_MODELOS]
+
+
+def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
+	"""Retorna um dicionário mapeando nomes amigáveis para IDs de modelos."""
+	return {_NOMES_AMIGAVEIS.get(modelo.nome, modelo.nome): modelo.nome for modelo in DEFAULT_MODELOS}
+
+
 @dataclass
 class FalhaModelo:
 	modelo: str
