@@ -477,50 +477,94 @@ def render_grafico_inflacao() -> None:
     st.write("**Exportar dados**")
 
     # Preparar DataFrame para exportação com valores unitários E percentuais
-    df_export = pd.DataFrame({"Mês": meses_ordenados})
+    # Abordagem declarativa usando pivot e merge do pandas
 
-    # Adicionar valores unitários e inflação para cada produto
-    for produto in produtos_nomes:
-        df_produto = df_completo[df_completo["produto_nome"] == produto].sort_values("ano_mes")
-        if not df_produto.empty:
-            unidade = unidades.get(produto, "UN")
-            # Valores unitários: alinhar explicitamente por mês para evitar diferenças de tamanho
-            serie_precos = (
-                df_produto.set_index("ano_mes")["custo_unitario_medio"]
-                .reindex(meses_ordenados)
-            )
-            df_export[f"{produto} - Preço ({unidade})"] = serie_precos.tolist()
+    # 1. Pivotar os preços: transformar produtos em colunas
+    # Usa pivot_table para lidar com possíveis duplicatas (média automática)
+    df_precos = df_completo.pivot_table(
+        index="ano_mes",
+        columns="produto_nome",
+        values="custo_unitario_medio",
+        aggfunc="mean"
+    ).reindex(meses_ordenados)
 
-            # Inflação acumulada: garantir que o comprimento case com meses_ordenados
-            if produto in inflacao_por_produto:
-                valores_inflacao = list(inflacao_por_produto[produto])
-                if len(valores_inflacao) < len(meses_ordenados):
-                    # Preenche meses faltantes com None para evitar ValueError
-                    valores_inflacao.extend([None] * (len(meses_ordenados) - len(valores_inflacao)))
-                elif len(valores_inflacao) > len(meses_ordenados):
-                    # Em caso de sobra, truncar para o mesmo comprimento
-                    valores_inflacao = valores_inflacao[:len(meses_ordenados)]
-                df_export[f"{produto} - Inflação (%)"] = valores_inflacao
+    # Renomear colunas para incluir unidade e tipo de dado
+    df_precos.columns = [
+        f"{col} - Preço ({unidades.get(col, 'UN')})"
+        for col in df_precos.columns
+    ]
 
-    # Adicionar inflação média e cesta
-    df_export["Inflação Média (%)"] = inflacao_media
+    # 2. Criar DataFrame de inflação por produto
+    # inflacao_por_produto já está alinhado com meses_ordenados (linha 394-395)
+    # mas usamos reindex para garantir robustez contra mudanças futuras
+    df_inflacao_produtos = pd.DataFrame(
+        inflacao_por_produto,
+        index=meses_ordenados
+    ).reindex(meses_ordenados)
+
+    # Renomear colunas para incluir tipo de dado
+    df_inflacao_produtos.columns = [
+        f"{col} - Inflação (%)"
+        for col in df_inflacao_produtos.columns
+    ]
+
+    # 3. Criar DataFrame com inflação média e dados da cesta
+    df_extras = pd.DataFrame(index=meses_ordenados)
+    df_extras["Inflação Média (%)"] = inflacao_media
+
     if not df_cesta.empty:
-        # Garantir que o custo da cesta tenha exatamente os mesmos meses de df_export
-        serie_custo_cesta = (
+        # Custo da cesta alinhado com meses_ordenados
+        df_extras["Cesta Básica - Custo (R$)"] = (
             df_cesta.set_index("ano_mes")["custo_cesta"]
             .reindex(meses_ordenados)
         )
-        df_export["Cesta Básica - Custo (R$)"] = serie_custo_cesta.tolist()
 
-        # Garantir que a inflação da cesta tenha o mesmo comprimento que meses_ordenados
+        # Inflação da cesta alinhada com meses_ordenados
+        # Preenche meses faltantes com último valor conhecido (comportamento original)
         if len(inflacao_cesta) < len(meses_ordenados):
+            # Preencher com último valor (ou None se lista vazia)
             ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else None
-            inflacao_alinhada = inflacao_cesta + [
+            inflacao_cesta_alinhada = inflacao_cesta + [
                 ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
             ]
         else:
-            inflacao_alinhada = inflacao_cesta[:len(meses_ordenados)]
-        df_export["Cesta Básica - Inflação (%)"] = inflacao_alinhada
+            # Truncar para o tamanho correto
+            inflacao_cesta_alinhada = inflacao_cesta[:len(meses_ordenados)]
+
+        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
+
+    # 4. Intercalar colunas de preço e inflação para cada produto
+    colunas_ordenadas = ["Mês"]
+    for produto in produtos_nomes:
+        unidade = unidades.get(produto, "UN")
+        col_preco = f"{produto} - Preço ({unidade})"
+        col_inflacao = f"{produto} - Inflação (%)"
+        if col_preco in df_precos.columns:
+            colunas_ordenadas.append(col_preco)
+        if col_inflacao in df_inflacao_produtos.columns:
+            colunas_ordenadas.append(col_inflacao)
+
+    # Adicionar colunas extras
+    colunas_ordenadas.extend(df_extras.columns.tolist())
+
+    # 5. Juntar todos os DataFrames
+    df_export = pd.concat(
+        [df_precos, df_inflacao_produtos, df_extras],
+        axis=1
+    )
+
+    # Garantir que o índice tem um nome conhecido antes de resetar
+    df_export.index.name = "ano_mes"
+    
+    # Resetar índice para transformar ano_mes em coluna "Mês"
+    df_export = df_export.reset_index().rename(columns={"ano_mes": "Mês"})
+
+    # Reordenar colunas para intercalar preço e inflação
+    # A filtragem garante que apenas colunas existentes sejam incluídas
+    # (proteção contra casos onde produtos não têm dados completos)
+    df_export = df_export[
+        [col for col in colunas_ordenadas if col in df_export.columns]
+    ]
 
     # Converter para CSV para download
     csv = df_export.to_csv(index=False, encoding="utf-8-sig", sep=";", decimal=",")
