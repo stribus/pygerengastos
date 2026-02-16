@@ -24,6 +24,7 @@ CONFIG_FILE = PROJECT_ROOT / "config" / "modelos_llm.toml"
 DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 DEFAULT_MAX_TOKENS = 8000
 MAX_ITENS_POR_CHAMADA = 50
+BACKGROUND_LOAD_TIMEOUT = 5.0  # Timeout em segundos para aguardar carregamento em background
 _ENV_LOADED = False
 
 # Cache thread-safe para modelos carregados
@@ -183,7 +184,7 @@ def obter_modelos_carregados(aguardar: bool = True) -> list[ModeloConfig]:
 			if aguardar:
 				logger.debug("Aguardando conclusão do carregamento em background")
 				try:
-					modelos = future.result(timeout=5.0)  # Timeout razoável
+					modelos = future.result(timeout=BACKGROUND_LOAD_TIMEOUT)
 				except concurrent.futures.TimeoutError:
 					logger.warning("Timeout aguardando carregamento, usando fallback")
 					modelos = _obter_modelos_fallback()

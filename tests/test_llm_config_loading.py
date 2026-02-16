@@ -487,14 +487,14 @@ def test_timeout_no_carregamento_background():
 	import time
 	
 	def _very_slow_load():
-		time.sleep(10)  # Muito lento, vai dar timeout
+		time.sleep(6)  # Levemente maior que BACKGROUND_LOAD_TIMEOUT (5s)
 		return []
 	
 	with patch.object(llm_module, "_carregar_modelos_toml", side_effect=_very_slow_load):
 		# Iniciar carregamento
 		iniciar_carregamento_background()
 		
-		# Tentar obter (vai dar timeout de 5s)
+		# Tentar obter (vai dar timeout após BACKGROUND_LOAD_TIMEOUT segundos)
 		modelos = obter_modelos_carregados(aguardar=True)
 		
 		# Deve usar fallback
