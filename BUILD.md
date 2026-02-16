@@ -88,6 +88,7 @@ dist/
 └── pygerengastos/
     ├── .venv/              # Ambiente virtual completo
     ├── src/                # Código fonte
+    ├── config/             # Configurações (modelos LLM, etc)
     ├── data/               # Dados e configurações
     ├── main.py             # Entry point
     ├── start.bat           # Executável Windows
