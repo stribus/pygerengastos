@@ -44,11 +44,10 @@ def _preencher_meses_faltantes(
     data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d")
     data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d")
 
-    # Nao inclui mes parcial: usa data_fim - 1 dia para garantir mes anterior
-    fim_ajustado = data_fim.replace(day=1) - timedelta(days=1)
+    # Inclui o mês que contém data_fim no range de meses
     meses = pd.period_range(
         start=data_inicio,
-        end=fim_ajustado,
+        end=data_fim,
         freq="M",
     ).strftime("%Y-%m").tolist()
 
