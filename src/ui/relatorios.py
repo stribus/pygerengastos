@@ -532,8 +532,8 @@ def render_grafico_inflacao() -> None:
         # Inflação da cesta alinhada com meses_ordenados
         # Preenche meses faltantes com último valor conhecido (comportamento original)
         if len(inflacao_cesta) < len(meses_ordenados):
-            # Preencher com último valor
-            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else 0.0
+            # Preencher com último valor (ou None se lista vazia)
+            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else None
             inflacao_cesta_alinhada = inflacao_cesta + [
                 ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
             ]
@@ -572,6 +572,8 @@ def render_grafico_inflacao() -> None:
         df_export = df_export.rename(columns={"index": "Mês"})
 
     # Reordenar colunas para intercalar preço e inflação
+    # A filtragem garante que apenas colunas existentes sejam incluídas
+    # (proteção contra casos onde produtos não têm dados completos)
     df_export = df_export[
         [col for col in colunas_ordenadas if col in df_export.columns]
     ]
