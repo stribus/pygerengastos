@@ -9,7 +9,7 @@ import json
 import os
 import textwrap
 
-from litellm.router import Router
+from litellm import completion
 
 from src.database import ItemParaClassificacao
 from src.logger import setup_logging
@@ -205,7 +205,6 @@ class LLMClassifier:
 		self._api_key_override: dict[str, str] = {}
 		if api_key:
 			self._api_key_override[self.model] = api_key
-		self._router_cache: dict[str, Router] = {}
 		self._num_retries = _ler_int_env("LLM_NUM_RETRIES", 2)
 
 	def classificar_itens(
@@ -379,22 +378,6 @@ class LLMClassifier:
 
 		return resultados, []
 
-	def _obter_router(self, config: ModeloConfig, api_key: str) -> Router:
-		if config.nome in self._router_cache:
-			return self._router_cache[config.nome]
-		model_list = [
-			{
-				"model_name": config.nome,
-				"litellm_params": {
-					"model": config.nome,
-					"api_key": api_key,
-				},
-			}
-		]
-		router = Router(model_list=model_list, num_retries=self._num_retries)
-		self._router_cache[config.nome] = router
-		return router
-
 	def _executar_chamada(
 		self,
 		payload: dict[str, Any],
@@ -404,10 +387,12 @@ class LLMClassifier:
 	) -> tuple[str, dict[str, Any]]:
 		logger.debug("Enviando payload para LiteLLM (%s): %s", config.nome, json.dumps(payload, ensure_ascii=False))
 		try:
-			router = self._obter_router(config, api_key)
-			response_obj = router.completion(
+			response_obj = completion(
+				model=config.nome,
+				api_key=api_key,
 				request_timeout=config.timeout,
-				**cast(dict[str, Any], payload),
+				num_retries=self._num_retries,
+				**payload,
 			)
 		except Exception as exc:  # pragma: no cover - erro propagado para fluxo geral
 			logger.exception("Erro ao chamar LiteLLM (%s): %s", config.nome, exc)
