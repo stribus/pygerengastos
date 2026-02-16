@@ -540,7 +540,7 @@ def render_grafico_inflacao() -> None:
         else:
             # Truncar para o tamanho correto
             inflacao_cesta_alinhada = inflacao_cesta[:len(meses_ordenados)]
-        
+
         df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
 
     # 4. Intercalar colunas de preço e inflação para cada produto
