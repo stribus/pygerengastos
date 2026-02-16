@@ -5,16 +5,13 @@ from typing import Any, Dict, List, Tuple
 import streamlit as st
 
 from src.classifiers import classificar_itens_pendentes
-from src.classifiers.llm_classifier import obter_modelos_disponiveis
+from src.classifiers.llm_classifier import obter_modelos_disponiveis, recarregar_modelos
 from src.database import salvar_nota, carregar_nota, remover_nota
 from src.scrapers import receita_rs
 from src.logger import setup_logging
 
 
 logger = setup_logging("ui.importacao")
-
-# Lista de modelos disponíveis (obtida de forma centralizada)
-MODELOS_LLM_DISPONIVEIS = obter_modelos_disponiveis()
 
 
 def _registrar_historico(resultado: Dict[str, Any]) -> None:
@@ -119,10 +116,28 @@ def render_pagina_importacao() -> None:
 	)
 
 	with st.expander("⚙️ Configurações de LLM", expanded=False):
-		st.caption("Defina a prioridade dos modelos para tentativas em caso de falha.")
+		# Botão para recarregar modelos do TOML
+		col1, col2 = st.columns([3, 1])
+		with col1:
+			st.caption("Defina a prioridade dos modelos para tentativas em caso de falha.")
+		with col2:
+			if st.button("🔄 Recarregar modelos", help="Recarrega configurações do arquivo modelos_llm.toml"):
+				try:
+					with st.spinner("Recarregando configurações..."):
+						modelos_atualizados = recarregar_modelos()
+						# Invalidar prioridade em sessão para usar nova lista
+						if "llm_model_priority" in st.session_state:
+							del st.session_state["llm_model_priority"]
+						st.success(f"✅ {len(modelos_atualizados)} modelo(s) recarregado(s) com sucesso!")
+						logger.info(f"Modelos LLM recarregados via UI: {len(modelos_atualizados)} modelos")
+						st.rerun()
+				except Exception as e:
+					st.error(f"❌ Erro ao recarregar modelos: {e}")
+					logger.exception("Erro ao recarregar modelos via UI")
+		
 		ordem_atual = st.session_state.get("llm_model_priority")
 		if not ordem_atual:
-			ordem_atual = MODELOS_LLM_DISPONIVEIS.copy()
+			ordem_atual = obter_modelos_disponiveis().copy()
 			st.session_state["llm_model_priority"] = ordem_atual
 
 		linhas = [

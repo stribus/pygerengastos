@@ -81,9 +81,19 @@ O SQLite3 agora mantém dimensões explícitas para datas e estabelecimentos, al
 
 A função `listar_itens_padronizados()` lê diretamente essa view, o que simplifica a montagem de dashboards mensais e relatórios por categoria.
 
+## Configuração de Modelos LLM
+
+Os modelos de LLM disponíveis estão configurados em `config/modelos_llm.toml`. Cada modelo possui:
+- Nome e ID (`gemini/gemini-2.5-flash-lite`, etc.)
+- Chave de API da variável de ambiente (`GEMINI_API_KEY`, `NVIDIA_API_KEY`, etc.)
+- Limites de tokens, itens por chamada e timeout
+- Configurações específicas do modelo (ex: `extra_body` para o Kimi)
+
+**Para adicionar um novo modelo**, edite `config/modelos_llm.toml` e adicione um novo bloco `[[modelos]]`. Veja [config/README.md](config/README.md) para detalhes.
+
 ## Classificação com LiteLLM (Gemini)
 
-Configure a variável `GEMINI_API_KEY` no arquivo `.env`  para habilitar a integração. O módulo `src.classifiers.llm_classifier` lê o `.env` automaticamente e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no SQLite3, chama o modelo `gemini/gemini-2.5-pro` via LiteLLM e grava o histórico:
+Configure as variáveis de API no arquivo `.env` para habilitar a integração. O módulo `src.classifiers.llm_classifier` lê as configurações de `config/modelos_llm.toml` e o `.env` automaticamente, e expõe o helper `classificar_itens_pendentes()` que busca itens sem categoria no SQLite3, chama o modelo configurado via LiteLLM e grava o histórico:
 
 ## Classificação semântica (Chroma + fallback no LLM)
 
