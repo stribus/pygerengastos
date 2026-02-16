@@ -82,12 +82,18 @@ def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
 	"""
 	Retorna um dicionário mapeando nomes amigáveis para IDs de modelos.
 	
-	Exemplo de retorno:
-	{
-		"Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
-		"LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
-		...
-	}
+	Retorno:
+		Dict com estrutura {nome_amigavel: model_id}
+	
+	Exemplo:
+		{
+			"Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
+			"LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
+			...
+		}
+	
+	Nota: Se um modelo não tiver nome amigável definido em _NOMES_AMIGAVEIS,
+	      o ID do modelo será usado como chave (fallback).
 	"""
 	return {_NOMES_AMIGAVEIS.get(modelo.nome, modelo.nome): modelo.nome for modelo in DEFAULT_MODELOS}
 
