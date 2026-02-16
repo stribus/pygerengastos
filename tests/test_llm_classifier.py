@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import json
 import os
 
@@ -43,6 +43,30 @@ def _item_para_classificacao() -> ItemParaClassificacao:
 		emitente_nome="Mercado Teste",
 		emissao_iso="2024-01-10T10:00:00",
 	)
+
+
+def _criar_mock_completion_response() -> Mock:
+	"""Cria um mock de resposta do litellm.completion para testes."""
+	conteudo_json = json.dumps({
+		"itens": [{
+			"sequencia": 1,
+			"categoria": "Alimentação",
+			"confianca": 0.9,
+			"justificativa": "teste"
+		}]
+	})
+	
+	mock_response = Mock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": conteudo_json
+				}
+			}
+		]
+	}
+	return mock_response
 
 
 def test_llm_classifier_interpreta_json_e_retorna_resultados():
@@ -326,28 +350,7 @@ def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 
 def test_extra_body_passado_para_litellm_quando_configurado():
 	"""Testa que extra_body é passado para litellm.completion quando presente no config."""
-	from unittest.mock import Mock
-	
-	# Mock da resposta do completion - precisa retornar dict no model_dump()
-	conteudo_json = json.dumps({
-		"itens": [{
-			"sequencia": 1,
-			"categoria": "Alimentação",
-			"confianca": 0.9,
-			"justificativa": "teste"
-		}]
-	})
-	
-	mock_response = Mock()
-	mock_response.model_dump.return_value = {
-		"choices": [
-			{
-				"message": {
-					"content": conteudo_json
-				}
-			}
-		]
-	}
+	mock_response = _criar_mock_completion_response()
 	
 	# Patch do completion
 	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
@@ -376,28 +379,7 @@ def test_extra_body_passado_para_litellm_quando_configurado():
 
 def test_extra_body_nao_passado_quando_nao_configurado():
 	"""Testa que extra_body NÃO é passado para litellm.completion quando ausente no config."""
-	from unittest.mock import Mock
-	
-	# Mock da resposta do completion - precisa retornar dict no model_dump()
-	conteudo_json = json.dumps({
-		"itens": [{
-			"sequencia": 1,
-			"categoria": "Alimentação",
-			"confianca": 0.9,
-			"justificativa": "teste"
-		}]
-	})
-	
-	mock_response = Mock()
-	mock_response.model_dump.return_value = {
-		"choices": [
-			{
-				"message": {
-					"content": conteudo_json
-				}
-			}
-		]
-	}
+	mock_response = _criar_mock_completion_response()
 	
 	# Patch do completion
 	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
