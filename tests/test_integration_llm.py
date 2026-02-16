@@ -1,6 +1,7 @@
 import os
 import pytest
 from decimal import Decimal
+from litellm.exceptions import RateLimitError
 from src.classifiers.llm_classifier import LLMClassifier, ModeloConfig
 from src.database import ItemParaClassificacao
 
@@ -39,7 +40,17 @@ def test_classifier_kimi_integration():
     )
 
     # Executar classificação
-    resultados = classifier.classificar_itens([item])
+    try:
+        resultados = classifier.classificar_itens([item])
+    except RateLimitError as err:
+        pytest.skip(f"Teste ignorado por limite de cota da API NVIDIA: {err}")
+    except Exception as err:
+        # Captura timeouts e outros erros transientes da API
+        erro_str = str(err).lower()
+        if any(keyword in erro_str for keyword in ["timeout", "timed out", "connection", "unavailable"]):
+            pytest.skip(f"Teste ignorado por erro transiente da API: {err}")
+        # Re-raise se não for um erro transiente conhecido
+        raise
 
     # Verificações
     assert len(resultados) == 1
