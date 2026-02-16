@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable, Sequence, cast
 import json
 import os
 import textwrap
+import tomllib
 
 from litellm import completion
 
@@ -17,6 +18,7 @@ from src.logger import setup_logging
 logger = setup_logging(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_FILE = PROJECT_ROOT / "config" / "modelos_llm.toml"
 DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 DEFAULT_MAX_TOKENS = 8000
 MAX_ITENS_POR_CHAMADA = 50
@@ -30,49 +32,39 @@ class ModeloConfig:
 	max_tokens: int
 	max_itens: int
 	timeout: float
+	nome_amigavel: str | None = None
 	extra_body: dict[str, Any] | None = None
 
 
-DEFAULT_MODELOS = [
-	ModeloConfig(
-		nome="gemini/gemini-2.5-flash-lite",
-		api_key_env="GEMINI_API_KEY",
-		max_tokens=DEFAULT_MAX_TOKENS,
-		max_itens=MAX_ITENS_POR_CHAMADA,
-		timeout=30.0,
-	),
-	ModeloConfig(
-		nome="nvidia_nim/meta/llama3-70b-instruct",
-		api_key_env="NVIDIA_API_KEY",
-		max_tokens=4096,
-		max_itens=20,
-		timeout=45.0,
-	),
-	ModeloConfig(
-		nome="nvidia_nim/moonshotai/kimi-k2.5",
-		api_key_env="NVIDIA_API_KEY",
-		max_tokens=8192,
-		max_itens=25,
-		timeout=45.0,
-		extra_body={"chat_template_kwargs": {"thinking": False}},
-	),
-	ModeloConfig(
-		nome="openai/gpt-4o",
-		api_key_env="OPENAI_API_KEY",
-		max_tokens=4096,
-		max_itens=30,
-		timeout=30.0,
-	),
-]
+def _carregar_modelos_toml() -> list[ModeloConfig]:
+	"""Carrega configurações de modelos do arquivo TOML."""
+	if not CONFIG_FILE.exists():
+		logger.error(f"Arquivo de configuração não encontrado: {CONFIG_FILE}")
+		return []
+
+	try:
+		with open(CONFIG_FILE, "rb") as f:
+			data = tomllib.load(f)
+		
+		modelos = []
+		for m in data.get("modelos", []):
+			modelos.append(ModeloConfig(
+				nome=m["nome"],
+				api_key_env=m["api_key_env"],
+				max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
+				max_itens=m.get("max_itens", MAX_ITENS_POR_CHAMADA),
+				timeout=float(m.get("timeout", 30.0)),
+				nome_amigavel=m.get("nome_amigavel"),
+				extra_body=m.get("extra_body")
+			))
+		logger.info(f"Carregados {len(modelos)} modelos de LLM de {CONFIG_FILE}")
+		return modelos
+	except Exception as e:
+		logger.error(f"Erro ao carregar {CONFIG_FILE}: {e}")
+		return []
 
 
-# Mapeamento de IDs de modelos para nomes amigáveis
-_NOMES_AMIGAVEIS = {
-	"gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite (Padrão)",
-	"nvidia_nim/meta/llama3-70b-instruct": "LLaMA 3 70B (NVIDIA)",
-	"nvidia_nim/moonshotai/kimi-k2.5": "Kimi K2.5 (Moonshot AI)",
-	"openai/gpt-4o": "GPT-4o (OpenAI)",
-}
+DEFAULT_MODELOS = _carregar_modelos_toml()
 
 
 def obter_modelos_disponiveis() -> list[str]:
@@ -94,10 +86,13 @@ def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
 			...
 		}
 
-	Nota: Se um modelo não tiver nome amigável definido em _NOMES_AMIGAVEIS,
+	Nota: Se um modelo não tiver nome amigável definido no TOML,
 	      o ID do modelo será usado como chave (fallback).
 	"""
-	return {_NOMES_AMIGAVEIS.get(modelo.nome, modelo.nome): modelo.nome for modelo in DEFAULT_MODELOS}
+	return {
+		(modelo.nome_amigavel or modelo.nome): modelo.nome 
+		for modelo in DEFAULT_MODELOS
+	}
 
 
 @dataclass
