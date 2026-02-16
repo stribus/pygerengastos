@@ -531,10 +531,16 @@ def render_grafico_inflacao() -> None:
 
         # Inflação da cesta alinhada com meses_ordenados
         # Preenche meses faltantes com último valor conhecido (comportamento original)
-        inflacao_cesta_alinhada = inflacao_cesta + [
-            inflacao_cesta[-1] if inflacao_cesta else 0.0
-            for _ in range(len(meses_ordenados) - len(inflacao_cesta))
-        ] if len(inflacao_cesta) < len(meses_ordenados) else inflacao_cesta[:len(meses_ordenados)]
+        if len(inflacao_cesta) < len(meses_ordenados):
+            # Preencher com último valor
+            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else 0.0
+            inflacao_cesta_alinhada = inflacao_cesta + [
+                ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
+            ]
+        else:
+            # Truncar para o tamanho correto
+            inflacao_cesta_alinhada = inflacao_cesta[:len(meses_ordenados)]
+        
         df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
 
     # 4. Intercalar colunas de preço e inflação para cada produto
@@ -559,7 +565,7 @@ def render_grafico_inflacao() -> None:
 
     # Resetar índice para transformar ano_mes em coluna "Mês"
     df_export = df_export.reset_index()
-    # O índice pode se chamar 'ano_mes' ou 'index' dependendo da operação
+    # O índice pode ser chamado 'ano_mes' ou 'index' dependendo da operação
     if "ano_mes" in df_export.columns:
         df_export = df_export.rename(columns={"ano_mes": "Mês"})
     else:
