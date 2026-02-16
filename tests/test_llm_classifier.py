@@ -322,3 +322,102 @@ def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 	print(f"\n✅ Teste de integração passou com {len(resultados)} itens classificados:")
 	for r in resultados:
 		print(f"   Seq {r.sequencia}: {r.categoria} (confiança: {r.confianca})")
+
+
+def test_extra_body_passado_para_litellm_quando_configurado():
+	"""Testa que extra_body é passado para litellm.completion quando presente no config."""
+	from unittest.mock import Mock
+	
+	# Mock da resposta do completion - precisa retornar dict no model_dump()
+	conteudo_json = json.dumps({
+		"itens": [{
+			"sequencia": 1,
+			"categoria": "Alimentação",
+			"confianca": 0.9,
+			"justificativa": "teste"
+		}]
+	})
+	
+	mock_response = Mock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": conteudo_json
+				}
+			}
+		]
+	}
+	
+	# Patch do completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		# Criar classificador com modelo que tem extra_body
+		classifier = LLMClassifier(model="nvidia_nim/moonshotai/kimi-k2.5", api_key="test-key")
+		
+		# Executar classificação
+		item = _item_para_classificacao()
+		classifier.classificar_itens([item])
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.called, "completion deveria ter sido chamado"
+		
+		# Obter os argumentos da chamada
+		call_args = mock_completion.call_args
+		assert call_args is not None, "completion deveria ter sido chamado com argumentos"
+		
+		# Verificar que extra_body foi passado
+		assert "extra_body" in call_args.kwargs, "extra_body deveria estar nos kwargs"
+		assert call_args.kwargs["extra_body"] == {"chat_template_kwargs": {"thinking": False}}, \
+			f"extra_body incorreto: {call_args.kwargs.get('extra_body')}"
+		
+		# Verificar que model foi passado explicitamente
+		assert call_args.kwargs["model"] == "nvidia_nim/moonshotai/kimi-k2.5"
+
+
+def test_extra_body_nao_passado_quando_nao_configurado():
+	"""Testa que extra_body NÃO é passado para litellm.completion quando ausente no config."""
+	from unittest.mock import Mock
+	
+	# Mock da resposta do completion - precisa retornar dict no model_dump()
+	conteudo_json = json.dumps({
+		"itens": [{
+			"sequencia": 1,
+			"categoria": "Alimentação",
+			"confianca": 0.9,
+			"justificativa": "teste"
+		}]
+	})
+	
+	mock_response = Mock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": conteudo_json
+				}
+			}
+		]
+	}
+	
+	# Patch do completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		# Criar classificador com modelo SEM extra_body
+		classifier = LLMClassifier(model="gemini/gemini-2.5-flash-lite", api_key="test-key")
+		
+		# Executar classificação
+		item = _item_para_classificacao()
+		classifier.classificar_itens([item])
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.called, "completion deveria ter sido chamado"
+		
+		# Obter os argumentos da chamada
+		call_args = mock_completion.call_args
+		assert call_args is not None, "completion deveria ter sido chamado com argumentos"
+		
+		# Verificar que extra_body NÃO foi passado
+		assert "extra_body" not in call_args.kwargs, \
+			f"extra_body não deveria estar nos kwargs, mas está: {call_args.kwargs.get('extra_body')}"
+		
+		# Verificar que model foi passado explicitamente
+		assert call_args.kwargs["model"] == "gemini/gemini-2.5-flash-lite"
