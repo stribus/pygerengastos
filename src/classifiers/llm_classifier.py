@@ -45,7 +45,7 @@ def _carregar_modelos_toml() -> list[ModeloConfig]:
 	try:
 		with open(CONFIG_FILE, "rb") as f:
 			data = tomllib.load(f)
-		
+
 		modelos = []
 		for m in data.get("modelos", []):
 			modelos.append(ModeloConfig(
@@ -90,7 +90,7 @@ def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
 	      o ID do modelo será usado como chave (fallback).
 	"""
 	return {
-		(modelo.nome_amigavel or modelo.nome): modelo.nome 
+		(modelo.nome_amigavel or modelo.nome): modelo.nome
 		for modelo in DEFAULT_MODELOS
 	}
 
