@@ -59,8 +59,7 @@ Use o modo headless: `.\start.ps1 -Headless`
 Reinstale as dependências:
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ## Uso Básico
