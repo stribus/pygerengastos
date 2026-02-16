@@ -46,8 +46,8 @@ def _preencher_meses_faltantes(
 
     meses = []
     mes_atual = data_inicio.replace(day=1)
-    # Não inclui mês parcial: para antes do primeiro dia do mês de data_fim
-    while mes_atual < data_fim.replace(day=1):
+    # Inclui o mês de data_fim
+    while mes_atual <= data_fim.replace(day=1):
         meses.append(mes_atual.strftime("%Y-%m"))
         # Avançar para próximo mês
         if mes_atual.month == 12:
