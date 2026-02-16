@@ -1,4 +1,4 @@
-from src.classifiers.llm_classifier import LLMClassifier, ModeloConfig, ItemParaClassificacao
+from src.classifiers.llm_classifier import LLMClassifier, ModeloConfig
 from src.database import ItemParaClassificacao
 import os
 from pathlib import Path
