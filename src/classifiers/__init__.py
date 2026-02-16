@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from src.database import (
 	ItemParaClassificacao,
@@ -34,6 +34,8 @@ def classificar_itens_pendentes(
 	model: str | None = None,
 	temperature: float | None = None,
 	chave_acesso: str | None = None,
+	model_priority: Sequence[str] | None = None,
+	progress_callback: Callable[[str], None] | None = None,
 ) -> list[ClassificacaoResultado]:
 	"""Busca itens sem categoria, envia para o LLM configurado e persiste o resultado."""
 
@@ -101,7 +103,11 @@ def classificar_itens_pendentes(
 				classifier = LLMClassifier(categorias=categorias)
 
 		logger.info(f"Enviando {len(itens_para_llm)} itens para a API do LLM configurado.")
-		resultados_llm = classifier.classificar_itens(itens_para_llm)
+		resultados_llm = classifier.classificar_itens(
+			itens_para_llm,
+			model_priority=model_priority,
+			progress_callback=progress_callback,
+		)
 		resultados_finais.extend(resultados_llm)
 
 	_salvar_resultados(resultados_finais, confirmar=confirmar, db_path=db_path)

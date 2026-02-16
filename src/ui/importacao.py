@@ -5,12 +5,16 @@ from typing import Any, Dict, List, Tuple
 import streamlit as st
 
 from src.classifiers import classificar_itens_pendentes
+from src.classifiers.llm_classifier import obter_modelos_disponiveis
 from src.database import salvar_nota, carregar_nota, remover_nota
 from src.scrapers import receita_rs
 from src.logger import setup_logging
 
 
 logger = setup_logging("ui.importacao")
+
+# Lista de modelos disponíveis (obtida de forma centralizada)
+MODELOS_LLM_DISPONIVEIS = obter_modelos_disponiveis()
 
 
 def _registrar_historico(resultado: Dict[str, Any]) -> None:
@@ -74,12 +78,19 @@ def _executar_classificacao_para_nota(
 	quantidade_itens = nota.total_itens or len(nota.itens)
 	limite = max(int(quantidade_itens or 0), 1)
 	mensagens: List[Tuple[str, str]] = []
+	progresso_placeholder = st.empty()
+	model_priority = st.session_state.get("llm_model_priority")
+
+	def _progress_callback(mensagem: str) -> None:
+		progresso_placeholder.info(mensagem)
 	try:
 		with st.spinner("Classificando itens automaticamente..."):
 			resultados = classificar_itens_pendentes(
 				limit=limite,
 				confirmar=False,
 				chave_acesso=nota.chave_acesso,
+				model_priority=model_priority,
+				progress_callback=_progress_callback,
 			)
 	except Exception as exc:  # pragma: no cover - interação manual
 		logger.exception("Falha ao classificar itens da nota %s", nota.chave_acesso)
@@ -106,6 +117,47 @@ def render_pagina_importacao() -> None:
 	st.write(
 		"Informe a chave de acesso (44 dígitos) para buscar a nota diretamente no portal da Receita Gaúcha."
 	)
+
+	with st.expander("⚙️ Configurações de LLM", expanded=False):
+		st.caption("Defina a prioridade dos modelos para tentativas em caso de falha.")
+		ordem_atual = st.session_state.get("llm_model_priority")
+		if not ordem_atual:
+			ordem_atual = MODELOS_LLM_DISPONIVEIS.copy()
+			st.session_state["llm_model_priority"] = ordem_atual
+
+		linhas = [
+			{"prioridade": idx + 1, "modelo": modelo} for idx, modelo in enumerate(ordem_atual)
+		]
+		editado = st.data_editor(
+			linhas,
+			hide_index=True,
+			num_rows="fixed",
+			column_config={
+				"prioridade": st.column_config.NumberColumn(
+					"Ordem",
+					min_value=1,
+					step=1,
+					width="small",
+				),
+				"modelo": st.column_config.TextColumn("Modelo", disabled=True),
+			},
+		)
+
+		def _ordenar_modelos(linhas_editadas, referencia):
+			def _prioridade_valor(linha, padrao):
+				try:
+					return int(linha.get("prioridade", padrao))
+				except (TypeError, ValueError):
+					return padrao
+
+			ordenadas = sorted(
+				linhas_editadas,
+				key=lambda item: (_prioridade_valor(item, 9999), referencia.index(item["modelo"])),
+			)
+			return [item["modelo"] for item in ordenadas]
+
+		nova_ordem = _ordenar_modelos(editado, ordem_atual)
+		st.session_state["llm_model_priority"] = nova_ordem
 
 	with st.form("form_importacao"):
 		chave_input = st.text_input("Chave de acesso", max_chars=54, help="Cole ou digite os 44 dígitos")
@@ -199,7 +251,7 @@ def render_pagina_importacao() -> None:
 					width="stretch",
 				on_click=_cb_ver
 			)
-			
+
 			# Interrompe o fluxo para aguardar ação do usuário
 			_renderizar_historico()
 			return
