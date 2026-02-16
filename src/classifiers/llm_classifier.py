@@ -83,11 +83,6 @@ def _carregar_modelos_toml() -> list[ModeloConfig]:
 	except tomllib.TOMLDecodeError as e:
 		logger.error(f"Erro de sintaxe TOML em {CONFIG_FILE}: {e}")
 		return []
-	except KeyError as e:
-		logger.error(
-			f"Configuração de modelo inválida em {CONFIG_FILE}: campo obrigatório ausente: {e!s}"
-		)
-		return []
 	except (OSError, IOError) as e:
 		logger.error(f"Erro de E/S ao ler arquivo de configuração {CONFIG_FILE}: {e}")
 		return []
