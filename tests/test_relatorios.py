@@ -32,17 +32,22 @@ def _criar_nota_teste(
     """
     nota_itens = [
         NotaItem(
-            sequencia=i + 1,
             descricao=desc,
+            codigo=None,
             valor_unitario=val_unit,
             quantidade=qtd,
             valor_total=val_unit * qtd,
             unidade=unid,
         )
-        for i, (desc, val_unit, qtd, unid) in enumerate(itens)
+        for desc, val_unit, qtd, unid in itens
     ]
     
     valor_total = sum(item.valor_total for item in nota_itens)
+    
+    # Convert YYYY-MM-DD to DD/MM/YYYY format expected by database
+    from datetime import datetime as dt
+    data_obj = dt.fromisoformat(emissao_data)
+    emissao_texto = data_obj.strftime("%d/%m/%Y 10:00:00")
     
     return NotaFiscal(
         chave_acesso=chave,
@@ -51,8 +56,7 @@ def _criar_nota_teste(
         emitente_endereco="Rua Teste, 123",
         numero="12345",
         serie="1",
-        emissao_texto=f"{emissao_data} 10:00:00",
-        emissao_iso=emissao_data,
+        emissao=emissao_texto,
         total_itens=len(nota_itens),
         valor_total=valor_total,
         valor_pago=valor_total,
@@ -119,20 +123,6 @@ def db_com_dados_teste(tmp_path):
     for nota in [nota1, nota2, nota3]:
         salvar_nota(nota, db_path=db_path)
     
-    # Atualizar produto_nome nos itens (normalização básica)
-    with conexao(db_path) as con:
-        con.execute("""
-            UPDATE itens 
-            SET produto_nome = CASE
-                WHEN descricao LIKE '%ARROZ%' THEN 'Arroz Branco'
-                WHEN descricao LIKE '%FEIJAO%' THEN 'Feijão Preto'
-                WHEN descricao LIKE '%DETERGENTE%' THEN 'Detergente Neutro'
-                WHEN descricao LIKE '%SABAO%' THEN 'Sabão em Pó'
-                ELSE descricao
-            END
-        """)
-        con.commit()
-    
     return db_path
 
 
@@ -158,12 +148,10 @@ def test_obter_top_produtos_por_quantidade(db_com_dados_teste):
     assert top_produtos[0]["produto_nome"] == "Detergente Neutro"
     assert top_produtos[0]["quantidade_total"] == 8.0
     
-    # Segundo produto: Arroz (2+1+2=5 unidades)
-    assert top_produtos[1]["produto_nome"] == "Arroz Branco"
+    # Produtos 2 e 3: Arroz (2+1+2=5) e Feijao (3+2=5) - ordem pode variar
+    produtos_5_unidades = {top_produtos[1]["produto_nome"], top_produtos[2]["produto_nome"]}
+    assert produtos_5_unidades == {"Arroz Branco", "Feijao Preto"}
     assert top_produtos[1]["quantidade_total"] == 5.0
-    
-    # Terceiro produto: Feijão (3+2=5 unidades)
-    assert top_produtos[2]["produto_nome"] == "Feijão Preto"
     assert top_produtos[2]["quantidade_total"] == 5.0
 
 
@@ -203,7 +191,8 @@ def test_obter_custos_unitarios_mensais(db_com_dados_teste):
     """Testa cálculo de custos unitários médios mensais."""
     db_path = db_com_dados_teste
     
-    produtos = ["Arroz Branco", "Feijão Preto"]
+    # Usar nomes normalizados (sem acentos) como retornado pelo banco
+    produtos = ["Arroz Branco", "Feijao Preto"]
     custos = obter_custos_unitarios_mensais(
         produtos,
         data_inicio="2025-01-01",
@@ -216,12 +205,12 @@ def test_obter_custos_unitarios_mensais(db_com_dados_teste):
     
     # Separar por produto
     custos_arroz = [c for c in custos if c["produto_nome"] == "Arroz Branco"]
-    custos_feijao = [c for c in custos if c["produto_nome"] == "Feijão Preto"]
+    custos_feijao = [c for c in custos if c["produto_nome"] == "Feijao Preto"]
     
     # Arroz aparece em 3 meses
     assert len(custos_arroz) == 3
     
-    # Feijão aparece em 2 meses
+    # Feijao aparece em 2 meses
     assert len(custos_feijao) == 2
     
     # Verificar estrutura dos registros
@@ -270,7 +259,8 @@ def test_obter_unidades_produtos(db_com_dados_teste):
     """Testa mapeamento de produtos para unidades mais comuns."""
     db_path = db_com_dados_teste
     
-    produtos = ["Arroz Branco", "Feijão Preto", "Detergente Neutro"]
+    # Usar nomes normalizados (sem acentos)
+    produtos = ["Arroz Branco", "Feijao Preto", "Detergente Neutro"]
     unidades = obter_unidades_produtos(produtos, db_path=db_path)
     
     # Deve retornar unidade para cada produto
@@ -278,7 +268,7 @@ def test_obter_unidades_produtos(db_com_dados_teste):
     
     # Todos os produtos de teste usam "UN"
     assert unidades["Arroz Branco"] == "UN"
-    assert unidades["Feijão Preto"] == "UN"
+    assert unidades["Feijao Preto"] == "UN"
     assert unidades["Detergente Neutro"] == "UN"
 
 
