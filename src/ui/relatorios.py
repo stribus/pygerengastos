@@ -266,19 +266,7 @@ def render_grafico_custos_unitarios() -> None:
     # Filtrar apenas produtos visíveis
     df_filtrado = df[df["produto_nome"].isin(produtos_visiveis)]
 
-    # Criar gráfico de linhas
-    fig_data = []
-    for produto in produtos_visiveis:
-        df_produto = df_filtrado[df_filtrado["produto_nome"] == produto].sort_values("ano_mes")
-        unidade = unidades.get(produto, "UN")
-
-        fig_data.append({
-            "name": f"{produto} ({unidade})",
-            "x": df_produto["ano_mes"].tolist(),
-            "y": df_produto["custo_unitario_medio"].tolist(),
-        })
-
-    # Usar chart nativo do Streamlit para simplicidade
+    # Criar gráfico de linhas usando chart nativo do Streamlit
     # Transformar dados para formato wide (cada produto = coluna)
     df_pivot = df_filtrado.pivot(
         index="ano_mes",
