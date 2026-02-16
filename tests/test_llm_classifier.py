@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence, cast
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import json
 import os
 
@@ -11,7 +11,7 @@ import pytest
 from litellm.exceptions import RateLimitError
 
 from src.classifiers import ClassificacaoResultado, classificar_itens_pendentes
-from src.classifiers.llm_classifier import LLMClassifier, MAX_ITENS_POR_CHAMADA
+from src.classifiers.llm_classifier import LLMClassifier, MAX_ITENS_POR_CHAMADA, ModeloConfig
 from src.database import ItemParaClassificacao, salvar_nota
 from src.scrapers import receita_rs
 
@@ -196,9 +196,6 @@ def test_llm_classifier_divide_requisicoes_em_chunks(monkeypatch):
 
 def test_executar_chamada_passa_extra_body_para_litellm():
 	"""Testa que _executar_chamada passa extra_body para litellm.completion quando configurado."""
-	from unittest.mock import MagicMock
-	from src.classifiers.llm_classifier import ModeloConfig
-	
 	# Criar uma configuração com extra_body
 	config = ModeloConfig(
 		nome="test/model",
@@ -253,9 +250,6 @@ def test_executar_chamada_passa_extra_body_para_litellm():
 
 def test_executar_chamada_nao_passa_extra_body_quando_ausente():
 	"""Testa que _executar_chamada não passa extra_body quando não está configurado."""
-	from unittest.mock import MagicMock
-	from src.classifiers.llm_classifier import ModeloConfig
-	
 	# Criar uma configuração SEM extra_body
 	config = ModeloConfig(
 		nome="test/model",
