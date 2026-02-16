@@ -492,10 +492,12 @@ def render_grafico_inflacao() -> None:
     # Abordagem declarativa usando pivot e merge do pandas
 
     # 1. Pivotar os preços: transformar produtos em colunas
-    df_precos = df_completo.pivot(
+    # Usa pivot_table para lidar com possíveis duplicatas (média automática)
+    df_precos = df_completo.pivot_table(
         index="ano_mes",
         columns="produto_nome",
-        values="custo_unitario_medio"
+        values="custo_unitario_medio",
+        aggfunc="mean"
     ).reindex(meses_ordenados)
 
     # Renomear colunas para incluir unidade e tipo de dado
@@ -528,10 +530,12 @@ def render_grafico_inflacao() -> None:
         )
 
         # Inflação da cesta alinhada com meses_ordenados
-        df_extras["Cesta Básica - Inflação (%)"] = pd.Series(
-            inflacao_cesta,
-            index=meses_ordenados[:len(inflacao_cesta)]
-        ).reindex(meses_ordenados, method='ffill')
+        # Preenche meses faltantes com último valor conhecido (comportamento original)
+        inflacao_cesta_alinhada = inflacao_cesta + [
+            inflacao_cesta[-1] if inflacao_cesta else 0.0
+            for _ in range(len(meses_ordenados) - len(inflacao_cesta))
+        ] if len(inflacao_cesta) < len(meses_ordenados) else inflacao_cesta[:len(meses_ordenados)]
+        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
 
     # 4. Intercalar colunas de preço e inflação para cada produto
     colunas_ordenadas = ["Mês"]
@@ -554,7 +558,12 @@ def render_grafico_inflacao() -> None:
     )
 
     # Resetar índice para transformar ano_mes em coluna "Mês"
-    df_export = df_export.reset_index().rename(columns={"index": "Mês"})
+    df_export = df_export.reset_index()
+    # O índice pode se chamar 'ano_mes' ou 'index' dependendo da operação
+    if "ano_mes" in df_export.columns:
+        df_export = df_export.rename(columns={"ano_mes": "Mês"})
+    else:
+        df_export = df_export.rename(columns={"index": "Mês"})
 
     # Reordenar colunas para intercalar preço e inflação
     df_export = df_export[
