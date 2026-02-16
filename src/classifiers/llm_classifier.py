@@ -64,7 +64,7 @@ DEFAULT_MODELOS = [
 ]
 
 
-# Mapeamento de nomes amigáveis para IDs de modelos
+# Mapeamento de IDs de modelos para nomes amigáveis
 _NOMES_AMIGAVEIS = {
 	"gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite (Padrão)",
 	"nvidia_nim/meta/llama3-70b-instruct": "LLaMA 3 70B (NVIDIA)",
@@ -79,7 +79,16 @@ def obter_modelos_disponiveis() -> list[str]:
 
 
 def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
-	"""Retorna um dicionário mapeando nomes amigáveis para IDs de modelos."""
+	"""
+	Retorna um dicionário mapeando nomes amigáveis para IDs de modelos.
+	
+	Exemplo de retorno:
+	{
+		"Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
+		"LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
+		...
+	}
+	"""
 	return {_NOMES_AMIGAVEIS.get(modelo.nome, modelo.nome): modelo.nome for modelo in DEFAULT_MODELOS}
 
 
