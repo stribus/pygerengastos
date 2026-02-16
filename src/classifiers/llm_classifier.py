@@ -386,15 +386,12 @@ class LLMClassifier:
 		api_key: str,
 	) -> tuple[str, dict[str, Any]]:
 		logger.debug("Enviando payload para LiteLLM (%s): %s", config.nome, json.dumps(payload, ensure_ascii=False))
-		# Remove 'model' do payload para evitar duplicação com model=config.nome
-		payload_sem_model = {k: v for k, v in payload.items() if k != "model"}
 		try:
 			response_obj = completion(
-				model=config.nome,
 				api_key=api_key,
 				request_timeout=config.timeout,
 				num_retries=self._num_retries,
-				**cast(dict[str, Any], payload_sem_model),
+				**cast(dict[str, Any], payload),
 			)
 		except Exception as exc:  # pragma: no cover - erro propagado para fluxo geral
 			logger.exception("Erro ao chamar LiteLLM (%s): %s", config.nome, exc)
