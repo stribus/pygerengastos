@@ -7,6 +7,7 @@ from src.database import inicializar_banco, seed_categorias_csv
 from src.ui import render_pagina_analise, render_pagina_importacao, render_pagina_relatorios
 from src.ui.home import render_home
 from src.logger import setup_logging
+from src.classifiers.llm_classifier import iniciar_carregamento_background
 
 logger = setup_logging("main")
 
@@ -14,6 +15,12 @@ def main() -> None:
 	try:
 		logger.info("Iniciando aplicação Gerenciador de Gastos")
 		st.set_page_config(page_title="Gerenciador de Gastos", layout="wide")
+		
+		# Iniciar carregamento de modelos LLM em background (não bloqueia UI)
+		if "modelos_llm_carregamento_iniciado" not in st.session_state:
+			logger.info("Iniciando carregamento de modelos LLM em background")
+			iniciar_carregamento_background()
+			st.session_state["modelos_llm_carregamento_iniciado"] = True
 		
 		# Inicialização do banco e categorias
 		if "banco_inicializado" not in st.session_state:
