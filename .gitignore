@@ -216,4 +216,4 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 e2e
-    src/data/chroma/
+src/data/chroma/
