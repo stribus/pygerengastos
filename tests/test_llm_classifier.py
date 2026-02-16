@@ -194,6 +194,114 @@ def test_llm_classifier_divide_requisicoes_em_chunks(monkeypatch):
 	assert len(resultados) == len(itens)
 
 
+def test_executar_chamada_passa_extra_body_para_litellm():
+	"""Testa que _executar_chamada passa extra_body para litellm.completion quando configurado."""
+	from unittest.mock import MagicMock
+	from src.classifiers.llm_classifier import ModeloConfig
+	
+	# Criar uma configuração com extra_body
+	config = ModeloConfig(
+		nome="test/model",
+		api_key_env="TEST_KEY",
+		max_tokens=1000,
+		max_itens=10,
+		timeout=30.0,
+		extra_body={"chat_template_kwargs": {"thinking": False}}
+	)
+	
+	# Criar mock da resposta do litellm.completion com model_dump()
+	mock_response = MagicMock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": '{"itens": [{"sequencia": 1, "categoria": "teste"}]}'
+				}
+			}
+		]
+	}
+	
+	# Patchear litellm.completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		classifier = LLMClassifier(api_key="test_key", model="test/model")
+		
+		# Preparar payload de teste
+		payload = {
+			"model": "test/model",
+			"messages": [{"role": "user", "content": "teste"}],
+			"temperature": 0.1,
+		}
+		
+		# Executar chamada
+		classifier._executar_chamada(payload, config=config, api_key="test_key")
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.call_count == 1
+		
+		# Extrair argumentos da chamada
+		call_args = mock_completion.call_args
+		
+		# Verificar argumentos explícitos
+		assert call_args.kwargs["model"] == "test/model"
+		assert call_args.kwargs["api_key"] == "test_key"
+		assert call_args.kwargs["request_timeout"] == 30.0
+		
+		# Verificar que extra_body foi passado
+		assert "extra_body" in call_args.kwargs
+		assert call_args.kwargs["extra_body"] == {"chat_template_kwargs": {"thinking": False}}
+
+
+def test_executar_chamada_nao_passa_extra_body_quando_ausente():
+	"""Testa que _executar_chamada não passa extra_body quando não está configurado."""
+	from unittest.mock import MagicMock
+	from src.classifiers.llm_classifier import ModeloConfig
+	
+	# Criar uma configuração SEM extra_body
+	config = ModeloConfig(
+		nome="test/model",
+		api_key_env="TEST_KEY",
+		max_tokens=1000,
+		max_itens=10,
+		timeout=30.0,
+		extra_body=None
+	)
+	
+	# Criar mock da resposta do litellm.completion com model_dump()
+	mock_response = MagicMock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": '{"itens": [{"sequencia": 1, "categoria": "teste"}]}'
+				}
+			}
+		]
+	}
+	
+	# Patchear litellm.completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		classifier = LLMClassifier(api_key="test_key", model="test/model")
+		
+		# Preparar payload de teste
+		payload = {
+			"model": "test/model",
+			"messages": [{"role": "user", "content": "teste"}],
+			"temperature": 0.1,
+		}
+		
+		# Executar chamada
+		classifier._executar_chamada(payload, config=config, api_key="test_key")
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.call_count == 1
+		
+		# Extrair argumentos da chamada
+		call_args = mock_completion.call_args
+		
+		# Verificar que extra_body NÃO foi passado
+		assert "extra_body" not in call_args.kwargs
+
+
 def _salvar_para_tmp(tmp_path, nota):
 	# Helper para persistir nota no banco temporário durante o teste
 	salvar_nota(nota, db_path=tmp_path / "tmp.db")
