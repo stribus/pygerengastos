@@ -24,8 +24,9 @@ api_key_env = "NVIDIA_API_KEY"
 max_tokens = 8192
 max_itens = 25
 timeout = 45.0
-[modelos.extra_body]
-chat_template_kwargs = { thinking = false }
+# Configuração específica do Kimi K2.5: desabilita modo thinking
+[modelos.extra_body.chat_template_kwargs]
+thinking = false
 
 [[modelos]]
 nome = "openai/gpt-4o"

@@ -46,21 +46,54 @@ def _carregar_modelos_toml() -> list[ModeloConfig]:
 		with open(CONFIG_FILE, "rb") as f:
 			data = tomllib.load(f)
 
-		modelos = []
-		for m in data.get("modelos", []):
-			modelos.append(ModeloConfig(
-				nome=m["nome"],
-				api_key_env=m["api_key_env"],
-				max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
-				max_itens=m.get("max_itens", MAX_ITENS_POR_CHAMADA),
-				timeout=float(m.get("timeout", 30.0)),
-				nome_amigavel=m.get("nome_amigavel"),
-				extra_body=m.get("extra_body")
-			))
+		modelos: list[ModeloConfig] = []
+		for idx, m in enumerate(data.get("modelos", [])):
+			# Validação explícita de campos obrigatórios para evitar KeyError silencioso
+			campos_obrigatorios = ("nome", "api_key_env")
+			campos_ausentes = [campo for campo in campos_obrigatorios if campo not in m]
+			if campos_ausentes:
+				logger.error(
+					f"Modelo na posição {idx} em {CONFIG_FILE} está malformado: "
+					f"campos obrigatórios ausentes: {', '.join(campos_ausentes)}. "
+					f"Entrada: {m!r}"
+				)
+				continue
+
+			try:
+				modelos.append(ModeloConfig(
+					nome=m["nome"],
+					api_key_env=m["api_key_env"],
+					max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
+					max_itens=m.get("max_itens", MAX_ITENS_POR_CHAMADA),
+					timeout=float(m.get("timeout", 30.0)),
+					nome_amigavel=m.get("nome_amigavel"),
+					extra_body=m.get("extra_body")
+				))
+			except Exception as e_modelo:
+				logger.error(
+					f"Erro ao processar modelo na posição {idx} "
+					f"({m.get('nome', '<sem nome>')}): {e_modelo}"
+				)
 		logger.info(f"Carregados {len(modelos)} modelos de LLM de {CONFIG_FILE}")
 		return modelos
+	except FileNotFoundError:
+		# Arquivo pode ter sido removido entre o exists() e o open()
+		logger.error(f"Arquivo de configuração não encontrado durante a leitura: {CONFIG_FILE}")
+		return []
+	except tomllib.TOMLDecodeError as e:
+		logger.error(f"Erro de sintaxe TOML em {CONFIG_FILE}: {e}")
+		return []
+	except KeyError as e:
+		logger.error(
+			f"Configuração de modelo inválida em {CONFIG_FILE}: campo obrigatório ausente: {e!s}"
+		)
+		return []
+	except (OSError, IOError) as e:
+		logger.error(f"Erro de E/S ao ler arquivo de configuração {CONFIG_FILE}: {e}")
+		return []
 	except Exception as e:
-		logger.error(f"Erro ao carregar {CONFIG_FILE}: {e}")
+		# Qualquer outro erro inesperado
+		logger.exception(f"Erro inesperado ao carregar {CONFIG_FILE}: {e}")
 		return []
 
 
@@ -136,50 +169,6 @@ LoadDotenvCallable = Callable[..., bool]
 _LOAD_DOTENV_FUNC: LoadDotenvCallable | None = None
 
 
-def _normalizar_chave_modelo_env(nome_modelo: str) -> str:
-	texto = "".join((ch if ch.isalnum() else "_") for ch in nome_modelo)
-	return texto.upper()
-
-
-def _ler_int_env(nome: str, padrao: int) -> int:
-	valor = os.getenv(nome)
-	if not valor:
-		return padrao
-	try:
-		return int(valor)
-	except ValueError:
-		return padrao
-
-
-def _ler_float_env(nome: str, padrao: float) -> float:
-	valor = os.getenv(nome)
-	if not valor:
-		return padrao
-	try:
-		return float(valor)
-	except ValueError:
-		return padrao
-
-
-def _carregar_configs_modelo() -> dict[str, ModeloConfig]:
-	configs: dict[str, ModeloConfig] = {}
-	for modelo in DEFAULT_MODELOS:
-		chave_env = _normalizar_chave_modelo_env(modelo.nome)
-		api_key_env = os.getenv(f"LLM_MODEL_{chave_env}_API_KEY_ENV", modelo.api_key_env)
-		max_tokens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_TOKENS", modelo.max_tokens)
-		max_itens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_ITENS", modelo.max_itens)
-		timeout = _ler_float_env(f"LLM_MODEL_{chave_env}_TIMEOUT", modelo.timeout)
-		configs[modelo.nome] = ModeloConfig(
-			nome=modelo.nome,
-			api_key_env=api_key_env,
-			max_tokens=max_tokens,
-			max_itens=max_itens,
-			timeout=timeout,
-			extra_body=modelo.extra_body,
-		)
-	return configs
-
-
 def _get_load_dotenv() -> LoadDotenvCallable:
 	global _LOAD_DOTENV_FUNC
 	if _LOAD_DOTENV_FUNC is not None:
@@ -233,11 +222,15 @@ class LLMClassifier:
 		self._timeout = timeout
 		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
 		self._model_priority = list(model_priority) if model_priority else [self.model]
-		self._model_configs = _carregar_configs_modelo()
 		self._api_key_override: dict[str, str] = {}
 		if api_key:
 			self._api_key_override[self.model] = api_key
-		self._num_retries = _ler_int_env("LLM_NUM_RETRIES", 2)
+
+		# Configuração global de retry via env var
+		try:
+			self._num_retries = int(os.getenv("LLM_NUM_RETRIES", "2"))
+		except ValueError:
+			self._num_retries = 2
 
 	def classificar_itens(
 		self,
@@ -330,9 +323,12 @@ class LLMClassifier:
 		return [self.model]
 
 	def _obter_config_modelo(self, modelo: str) -> ModeloConfig:
-		config = self._model_configs.get(modelo)
-		if config:
-			return config
+		"""Obtém configuração do modelo do TOML ou retorna config padrão."""
+		for config in DEFAULT_MODELOS:
+			if config.nome == modelo:
+				return config
+
+		# Fallback para modelos não configurados no TOML
 		return ModeloConfig(
 			nome=modelo,
 			api_key_env="GEMINI_API_KEY",
