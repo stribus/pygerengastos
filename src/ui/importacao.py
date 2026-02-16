@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import streamlit as st
 
 from src.classifiers import classificar_itens_pendentes
+from src.classifiers.llm_classifier import obter_modelos_disponiveis
 from src.database import salvar_nota, carregar_nota, remover_nota
 from src.scrapers import receita_rs
 from src.logger import setup_logging
@@ -12,12 +13,8 @@ from src.logger import setup_logging
 
 logger = setup_logging("ui.importacao")
 
-MODELOS_LLM_DISPONIVEIS = [
-	"gemini/gemini-2.5-flash-lite",
-	"nvidia_nim/meta/llama3-70b-instruct",
-	"nvidia_nim/moonshotai/kimi-k2.5",
-	"openai/gpt-4o",
-]
+# Lista de modelos disponíveis (obtida de forma centralizada)
+MODELOS_LLM_DISPONIVEIS = obter_modelos_disponiveis()
 
 
 def _registrar_historico(resultado: Dict[str, Any]) -> None:
