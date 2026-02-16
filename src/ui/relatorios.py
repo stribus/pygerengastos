@@ -507,10 +507,12 @@ def render_grafico_inflacao() -> None:
     ]
 
     # 2. Criar DataFrame de inflação por produto
+    # inflacao_por_produto já está alinhado com meses_ordenados (linha 394-395)
+    # mas usamos reindex para garantir robustez contra mudanças futuras
     df_inflacao_produtos = pd.DataFrame(
         inflacao_por_produto,
         index=meses_ordenados
-    )
+    ).reindex(meses_ordenados)
 
     # Renomear colunas para incluir tipo de dado
     df_inflacao_produtos.columns = [
@@ -563,13 +565,11 @@ def render_grafico_inflacao() -> None:
         axis=1
     )
 
+    # Garantir que o índice tem um nome conhecido antes de resetar
+    df_export.index.name = "ano_mes"
+    
     # Resetar índice para transformar ano_mes em coluna "Mês"
-    df_export = df_export.reset_index()
-    # O índice pode ser chamado 'ano_mes' ou 'index' dependendo da operação
-    if "ano_mes" in df_export.columns:
-        df_export = df_export.rename(columns={"ano_mes": "Mês"})
-    else:
-        df_export = df_export.rename(columns={"index": "Mês"})
+    df_export = df_export.reset_index().rename(columns={"ano_mes": "Mês"})
 
     # Reordenar colunas para intercalar preço e inflação
     # A filtragem garante que apenas colunas existentes sejam incluídas
