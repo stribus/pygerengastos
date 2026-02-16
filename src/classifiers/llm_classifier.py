@@ -392,7 +392,7 @@ class LLMClassifier:
 				api_key=api_key,
 				request_timeout=config.timeout,
 				num_retries=self._num_retries,
-				**payload,
+				**cast(dict[str, Any], payload),
 			)
 		except Exception as exc:  # pragma: no cover - erro propagado para fluxo geral
 			logger.exception("Erro ao chamar LiteLLM (%s): %s", config.nome, exc)
