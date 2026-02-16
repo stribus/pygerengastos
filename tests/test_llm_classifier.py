@@ -217,32 +217,32 @@ def test_executar_chamada_passa_extra_body_para_litellm():
 			}
 		]
 	}
-	
+
 	# Patchear litellm.completion
 	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
 		classifier = LLMClassifier(api_key="test_key", model="test/model")
-		
+
 		# Preparar payload de teste
 		payload = {
 			"model": "test/model",
 			"messages": [{"role": "user", "content": "teste"}],
 			"temperature": 0.1,
 		}
-		
+
 		# Executar chamada
 		classifier._executar_chamada(payload, config=config, api_key="test_key")
-		
+
 		# Verificar que completion foi chamado
 		assert mock_completion.call_count == 1
-		
+
 		# Extrair argumentos da chamada
 		call_args = mock_completion.call_args
-		
+
 		# Verificar argumentos explícitos
 		assert call_args.kwargs["model"] == "test/model"
 		assert call_args.kwargs["api_key"] == "test_key"
 		assert call_args.kwargs["request_timeout"] == 30.0
-		
+
 		# Verificar que extra_body foi passado
 		assert "extra_body" in call_args.kwargs
 		assert call_args.kwargs["extra_body"] == {"chat_template_kwargs": {"thinking": False}}
@@ -271,27 +271,27 @@ def test_executar_chamada_nao_passa_extra_body_quando_ausente():
 			}
 		]
 	}
-	
+
 	# Patchear litellm.completion
 	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
 		classifier = LLMClassifier(api_key="test_key", model="test/model")
-		
+
 		# Preparar payload de teste
 		payload = {
 			"model": "test/model",
 			"messages": [{"role": "user", "content": "teste"}],
 			"temperature": 0.1,
 		}
-		
+
 		# Executar chamada
 		classifier._executar_chamada(payload, config=config, api_key="test_key")
-		
+
 		# Verificar que completion foi chamado
 		assert mock_completion.call_count == 1
-		
+
 		# Extrair argumentos da chamada
 		call_args = mock_completion.call_args
-		
+
 		# Verificar que extra_body NÃO foi passado
 		assert "extra_body" not in call_args.kwargs
 
