@@ -203,7 +203,7 @@ csv = df.to_csv(
 ### Pré-requisitos
 ```bash
 # Instalar dependências
-pip install streamlit pandas httpx beautifulsoup4
+uv pip install streamlit pandas httpx beautifulsoup4
 
 # Popular dados de teste
 python populate_test_data.py
