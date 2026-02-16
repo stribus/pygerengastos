@@ -45,8 +45,7 @@ def _criar_nota_teste(
     valor_total = sum(item.valor_total for item in nota_itens)
     
     # Convert YYYY-MM-DD to DD/MM/YYYY format expected by database
-    from datetime import datetime as dt
-    data_obj = dt.fromisoformat(emissao_data)
+    data_obj = datetime.fromisoformat(emissao_data)
     emissao_texto = data_obj.strftime("%d/%m/%Y 10:00:00")
     
     return NotaFiscal(
