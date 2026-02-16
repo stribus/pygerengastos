@@ -40,20 +40,13 @@ def _preencher_meses_faltantes(
         # Retorna DataFrame vazio com estrutura esperada
         return pd.DataFrame(columns=["ano_mes", "produto_nome", "custo_unitario_medio"])
 
-    # Gerar lista completa de meses no período
+    # Gerar lista completa de meses no período usando pd.period_range
     data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d")
     data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d")
 
-    meses = []
-    mes_atual = data_inicio.replace(day=1)
-    # Não inclui mês parcial: para antes do primeiro dia do mês de data_fim
-    while mes_atual < data_fim.replace(day=1):
-        meses.append(mes_atual.strftime("%Y-%m"))
-        # Avançar para próximo mês
-        if mes_atual.month == 12:
-            mes_atual = mes_atual.replace(year=mes_atual.year + 1, month=1)
-        else:
-            mes_atual = mes_atual.replace(month=mes_atual.month + 1)
+    # Não inclui mês parcial: usa data_fim - 1 dia para garantir mês anterior
+    fim_ajustado = data_fim.replace(day=1) - timedelta(days=1)
+    meses = pd.period_range(start=data_inicio, end=fim_ajustado, freq='M').strftime("%Y-%m").tolist()
 
     # Criar DataFrame completo com todos produtos x meses
     linhas_completas = []
