@@ -19,9 +19,14 @@ api_key_env = "SUA_API_KEY_ENV"
 max_tokens = 4096
 max_itens = 30
 timeout = 30.0
-# Opcional: adicionar extra_body se o modelo exigir parâmetros específicos
+
+# Opcional: extra_body simples se o modelo exigir parâmetros específicos
 [modelos.extra_body]
 custom_param = "value"
+
+# Opcional: extra_body aninhado (ex.: Kimi K2.5)
+[modelos.extra_body.chat_template_kwargs]
+thinking = false
 ```
 
 3. Certifique-se de que a variável de ambiente está configurada no `.env`
