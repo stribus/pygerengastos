@@ -30,6 +30,7 @@ class ModeloConfig:
 	max_tokens: int
 	max_itens: int
 	timeout: float
+	extra_body: dict[str, Any] | None = None
 
 
 DEFAULT_MODELOS = [
@@ -53,6 +54,7 @@ DEFAULT_MODELOS = [
 		max_tokens=8192,
 		max_itens=25,
 		timeout=45.0,
+		extra_body={"chat_template_kwargs": {"thinking": False}},
 	),
 	ModeloConfig(
 		nome="openai/gpt-4o",
@@ -81,17 +83,17 @@ def obter_modelos_disponiveis() -> list[str]:
 def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
 	"""
 	Retorna um dicionário mapeando nomes amigáveis para IDs de modelos.
-	
+
 	Retorno:
 		Dict com estrutura {nome_amigavel: model_id}
-	
+
 	Exemplo:
 		{
 			"Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
 			"LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
 			...
 		}
-	
+
 	Nota: Se um modelo não tiver nome amigável definido em _NOMES_AMIGAVEIS,
 	      o ID do modelo será usado como chave (fallback).
 	"""
@@ -178,6 +180,7 @@ def _carregar_configs_modelo() -> dict[str, ModeloConfig]:
 			max_tokens=max_tokens,
 			max_itens=max_itens,
 			timeout=timeout,
+			extra_body=modelo.extra_body,
 		)
 	return configs
 
@@ -422,6 +425,11 @@ class LLMClassifier:
 		logger.debug("Enviando payload para LiteLLM (%s): %s", config.nome, json.dumps(payload, ensure_ascii=False))
 		# Remove 'model' do payload para evitar duplicação com model=config.nome explícito
 		payload_limpo = {k: v for k, v in payload.items() if k != "model"}
+
+		# Injeta parâmetros extras se configurado para o modelo
+		if config.extra_body:
+			payload_limpo["extra_body"] = config.extra_body
+
 		try:
 			response_obj = completion(
 				model=config.nome,
