@@ -3,7 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 from typing import Sequence, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch , MagicMock
+
 import json
 import os
 
@@ -11,7 +12,7 @@ import pytest
 from litellm.exceptions import RateLimitError
 
 from src.classifiers import ClassificacaoResultado, classificar_itens_pendentes
-from src.classifiers.llm_classifier import LLMClassifier, MAX_ITENS_POR_CHAMADA
+from src.classifiers.llm_classifier import LLMClassifier, MAX_ITENS_POR_CHAMADA, ModeloConfig
 from src.database import ItemParaClassificacao, salvar_nota
 from src.scrapers import receita_rs
 
@@ -45,6 +46,30 @@ def _item_para_classificacao() -> ItemParaClassificacao:
 	)
 
 
+def _criar_mock_completion_response() -> Mock:
+	"""Cria um mock de resposta do litellm.completion para testes."""
+	conteudo_json = json.dumps({
+		"itens": [{
+			"sequencia": 1,
+			"categoria": "Alimentação",
+			"confianca": 0.9,
+			"justificativa": "teste"
+		}]
+	})
+	
+	mock_response = Mock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": conteudo_json
+				}
+			}
+		]
+	}
+	return mock_response
+
+
 def test_llm_classifier_interpreta_json_e_retorna_resultados():
 	conteudo = {
 		"choices": [
@@ -71,15 +96,13 @@ def test_llm_classifier_interpreta_json_e_retorna_resultados():
 		]
 	}
 
-	class FakeResponse:
-		def model_dump(self):
-			return conteudo
+	def _fake_executar(self, payload, *, config, api_key):  # type: ignore[override]
+		return conteudo["choices"][0]["message"]["content"], conteudo
 
-	with patch("src.classifiers.llm_classifier.completion", return_value=FakeResponse()) as mock_completion:
+	with patch.object(LLMClassifier, "_executar_chamada", _fake_executar):
 		classifier = LLMClassifier(api_key="teste")
 		itens = [_item_para_classificacao()]
 		resultados = classifier.classificar_itens(itens)
-		mock_completion.assert_called_once()
 
 	assert len(resultados) == 1
 	resultado = resultados[0]
@@ -100,7 +123,13 @@ def test_classificar_itens_pendentes_usa_registrar_classificacao(tmp_path):
 			self.chamadas = 0
 			self.model = "fake"
 
-		def classificar_itens(self, itens: Sequence[ItemParaClassificacao]):
+		def classificar_itens(
+			self,
+			itens: Sequence[ItemParaClassificacao],
+			*,
+			model_priority=None,
+			progress_callback=None,
+		):
 			self.chamadas += 1
 			return [
 				ClassificacaoResultado(
@@ -169,7 +198,7 @@ def test_llm_classifier_divide_requisicoes_em_chunks(monkeypatch):
 			],
 		}
 
-	def _fake_executar(self, payload):  # type: ignore[override]
+	def _fake_executar(self, payload, *, config, api_key):  # type: ignore[override]
 		indice = len(chamadas_executadas)
 		sequencias = sequencias_por_bloco[indice]
 		conteudo = json.dumps(
@@ -190,6 +219,108 @@ def test_llm_classifier_divide_requisicoes_em_chunks(monkeypatch):
 	assert len(resultados) == len(itens)
 
 
+def test_executar_chamada_passa_extra_body_para_litellm():
+	"""Testa que _executar_chamada passa extra_body para litellm.completion quando configurado."""
+	# Criar uma configuração com extra_body
+	config = ModeloConfig(
+		nome="test/model",
+		api_key_env="TEST_KEY",
+		max_tokens=1000,
+		max_itens=10,
+		timeout=30.0,
+		extra_body={"chat_template_kwargs": {"thinking": False}}
+	)
+
+	# Criar mock da resposta do litellm.completion com model_dump()
+	mock_response = MagicMock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": '{"itens": [{"sequencia": 1, "categoria": "teste"}]}'
+				}
+			}
+		]
+	}
+
+	# Patchear litellm.completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		classifier = LLMClassifier(api_key="test_key", model="test/model")
+
+		# Preparar payload de teste
+		payload = {
+			"model": "test/model",
+			"messages": [{"role": "user", "content": "teste"}],
+			"temperature": 0.1,
+		}
+
+		# Executar chamada
+		classifier._executar_chamada(payload, config=config, api_key="test_key")
+
+		# Verificar que completion foi chamado
+		assert mock_completion.call_count == 1
+
+		# Extrair argumentos da chamada
+		call_args = mock_completion.call_args
+
+		# Verificar argumentos explícitos
+		assert call_args.kwargs["model"] == "test/model"
+		assert call_args.kwargs["api_key"] == "test_key"
+		assert call_args.kwargs["request_timeout"] == 30.0
+
+		# Verificar que extra_body foi passado
+		assert "extra_body" in call_args.kwargs
+		assert call_args.kwargs["extra_body"] == {"chat_template_kwargs": {"thinking": False}}
+
+
+def test_executar_chamada_nao_passa_extra_body_quando_ausente():
+	"""Testa que _executar_chamada não passa extra_body quando não está configurado."""
+	# Criar uma configuração SEM extra_body
+	config = ModeloConfig(
+		nome="test/model",
+		api_key_env="TEST_KEY",
+		max_tokens=1000,
+		max_itens=10,
+		timeout=30.0,
+		extra_body=None
+	)
+
+	# Criar mock da resposta do litellm.completion com model_dump()
+	mock_response = MagicMock()
+	mock_response.model_dump.return_value = {
+		"choices": [
+			{
+				"message": {
+					"content": '{"itens": [{"sequencia": 1, "categoria": "teste"}]}'
+				}
+			}
+		]
+	}
+
+	# Patchear litellm.completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		classifier = LLMClassifier(api_key="test_key", model="test/model")
+
+		# Preparar payload de teste
+		payload = {
+			"model": "test/model",
+			"messages": [{"role": "user", "content": "teste"}],
+			"temperature": 0.1,
+		}
+
+		# Executar chamada
+		classifier._executar_chamada(payload, config=config, api_key="test_key")
+
+		# Verificar que completion foi chamado
+		assert mock_completion.call_count == 1
+
+		# Extrair argumentos da chamada
+		call_args = mock_completion.call_args
+
+		# Verificar que extra_body NÃO foi passado
+		assert "extra_body" not in call_args.kwargs
+
+
 def _salvar_para_tmp(tmp_path, nota):
 	# Helper para persistir nota no banco temporário durante o teste
 	salvar_nota(nota, db_path=tmp_path / "tmp.db")
@@ -201,7 +332,7 @@ def _salvar_para_tmp(tmp_path, nota):
 )
 def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 	"""Teste de integração real com modelo Gemini via LiteLLM.
-	
+
 	Valida que:
 	1. A API responde com sucesso
 	2. O JSON retornado tem a estrutura esperada
@@ -209,7 +340,7 @@ def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 	4. A confiança está no formato esperado (0.0 a 1.0)
 	"""
 	classifier = LLMClassifier(model="gemini/gemini-2.5-pro", temperature=0.1)
-	
+
 	# Criar itens de teste com características distintas para classificação
 	itens = [
 		ItemParaClassificacao(
@@ -255,17 +386,17 @@ def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 			emissao_iso="2025-11-20T14:30:00",
 		),
 	]
-	
+
 	# Executar classificação
 	try:
 		resultados = classifier.classificar_itens(itens)
 	except RateLimitError as err:
 		pytest.skip(f"Teste ignorado por limite de cota do Gemini: {err}")
-	
+
 	# Validações básicas
 	assert resultados, "A API deve retornar resultados"
 	assert len(resultados) > 0, "Deve classificar pelo menos um item"
-	
+
 	# Validar cada resultado
 	for resultado in resultados:
 		# Validar campos obrigatórios
@@ -274,47 +405,104 @@ def test_llm_api_real_classifica_itens_e_retorna_json_valido():
 		assert resultado.categoria, "categoria não pode ser vazia"
 		assert resultado.origem == "gemini-litellm", "origem deve ser 'gemini-litellm'"
 		assert resultado.modelo, "modelo deve estar preenchido"
-		
+
 		# Validar confiança (se presente)
 		if resultado.confianca is not None:
 			assert 0.0 <= resultado.confianca <= 1.0, \
 				f"confiança deve estar entre 0 e 1, obtido: {resultado.confianca}"
-		
+
 		# Validar JSON de resposta
 		assert resultado.resposta_json, "resposta_json deve estar presente"
-		
+
 		# Parsear e validar estrutura do JSON
 		try:
 			dados_resposta = json.loads(resultado.resposta_json)
 			assert "payload" in dados_resposta, "JSON deve conter 'payload'"
 			assert "resposta" in dados_resposta, "JSON deve conter 'resposta'"
-			
+
 			# Validar payload
 			payload = dados_resposta["payload"]
 			assert "model" in payload, "payload deve conter 'model'"
 			assert "messages" in payload, "payload deve conter 'messages'"
-			
+
 			# Validar resposta da API
 			resposta_api = dados_resposta["resposta"]
 			assert "choices" in resposta_api, "resposta API deve conter 'choices'"
-			
+
 		except json.JSONDecodeError as e:
 			pytest.fail(f"JSON de resposta inválido: {e}")
-	
+
 	# Validar categorias específicas esperadas (aproximadamente)
 	categorias_encontradas = {r.categoria.lower() for r in resultados}
-	
+
 	# Pelo menos alguma categoria relacionada a alimentação/limpeza/higiene deve aparecer
 	categorias_validas = {
 		"alimentacao", "alimentação", "alimento", "comida",
 		"limpeza", "higiene", "cuidados pessoais", "pessoal"
 	}
-	
+
 	assert any(
 		any(cat_valida in cat_encontrada for cat_valida in categorias_validas)
 		for cat_encontrada in categorias_encontradas
 	), f"Pelo menos uma categoria válida esperada, obtidas: {categorias_encontradas}"
-	
+
 	print(f"\n✅ Teste de integração passou com {len(resultados)} itens classificados:")
 	for r in resultados:
 		print(f"   Seq {r.sequencia}: {r.categoria} (confiança: {r.confianca})")
+
+
+def test_extra_body_passado_para_litellm_quando_configurado():
+	"""Testa que extra_body é passado para litellm.completion quando presente no config."""
+	mock_response = _criar_mock_completion_response()
+	
+	# Patch do completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		# Criar classificador com modelo que tem extra_body
+		classifier = LLMClassifier(model="nvidia_nim/moonshotai/kimi-k2.5", api_key="test-key")
+		
+		# Executar classificação
+		item = _item_para_classificacao()
+		classifier.classificar_itens([item])
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.called, "completion deveria ter sido chamado"
+		
+		# Obter os argumentos da chamada
+		call_args = mock_completion.call_args
+		assert call_args is not None, "completion deveria ter sido chamado com argumentos"
+		
+		# Verificar que extra_body foi passado
+		assert "extra_body" in call_args.kwargs, "extra_body deveria estar nos kwargs"
+		assert call_args.kwargs["extra_body"] == {"chat_template_kwargs": {"thinking": False}}, \
+			f"extra_body incorreto: {call_args.kwargs.get('extra_body')}"
+		
+		# Verificar que model foi passado explicitamente
+		assert call_args.kwargs["model"] == "nvidia_nim/moonshotai/kimi-k2.5"
+
+
+def test_extra_body_nao_passado_quando_nao_configurado():
+	"""Testa que extra_body NÃO é passado para litellm.completion quando ausente no config."""
+	mock_response = _criar_mock_completion_response()
+	
+	# Patch do completion
+	with patch("src.classifiers.llm_classifier.completion", return_value=mock_response) as mock_completion:
+		# Criar classificador com modelo SEM extra_body
+		classifier = LLMClassifier(model="gemini/gemini-2.5-flash-lite", api_key="test-key")
+		
+		# Executar classificação
+		item = _item_para_classificacao()
+		classifier.classificar_itens([item])
+		
+		# Verificar que completion foi chamado
+		assert mock_completion.called, "completion deveria ter sido chamado"
+		
+		# Obter os argumentos da chamada
+		call_args = mock_completion.call_args
+		assert call_args is not None, "completion deveria ter sido chamado com argumentos"
+		
+		# Verificar que extra_body NÃO foi passado
+		assert "extra_body" not in call_args.kwargs, \
+			f"extra_body não deveria estar nos kwargs, mas está: {call_args.kwargs.get('extra_body')}"
+		
+		# Verificar que model foi passado explicitamente
+		assert call_args.kwargs["model"] == "gemini/gemini-2.5-flash-lite"

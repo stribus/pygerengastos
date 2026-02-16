@@ -58,6 +58,9 @@ include = [
 ]
 
 [tool.pytest.ini_options]
+markers = [
+    "integration: testes de integracao com APIs externas",
+]
 filterwarnings = [
     "ignore::pydantic.PydanticDeprecatedSince20:litellm.*",
 ]
