@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src.classifiers import classificar_itens_pendentes
+from src.classifiers.llm_classifier import obter_modelos_com_nomes_amigaveis
 from src.database import (
     ItemNotaRevisao,
     NotaParaRevisao,
@@ -15,13 +16,8 @@ from src.database import (
     registrar_revisoes_manuais,
 )
 
-# Modelos de IA disponíveis
-MODELOS_IA = {
-    "Gemini 2.5 Flash Lite (Padrão)": "gemini/gemini-2.5-flash-lite",
-    "LLaMA 3 70B (NVIDIA)": "nvidia_nim/meta/llama3-70b-instruct",
-    "Kimi K2.5 (Moonshot AI)": "nvidia_nim/moonshotai/kimi-k2.5",
-    "GPT-4o (OpenAI)": "openai/gpt-4o",
-}
+# Modelos de IA disponíveis (obtidos de forma centralizada)
+MODELOS_IA = obter_modelos_com_nomes_amigaveis()
 
 
 @st.dialog("Escolher modelo de IA")
