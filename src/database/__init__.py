@@ -308,7 +308,7 @@ def _criar_produto(
 	marca = marca_base.strip() if marca_base else None
 	if not nome:
 		raise ValueError("nome_base não pode ser vazio")
-	
+
 	try:
 		cursor = con.execute(
 			"""
@@ -318,7 +318,7 @@ def _criar_produto(
 			[nome, marca, categoria_id],
 		)
 		produto_id = cursor.lastrowid
-		
+
 		# Busca o produto recém-criado
 		row = con.execute(
 			"""
@@ -328,7 +328,7 @@ def _criar_produto(
 			""",
 			[produto_id],
 		).fetchone()
-		
+
 	except sqlite3.IntegrityError:
 		# Produto já existe (violação de UNIQUE), busca ele
 		row = con.execute(
@@ -341,10 +341,10 @@ def _criar_produto(
 			""",
 			[nome, marca or ""],
 		).fetchone()
-	
+
 	if not row:
 		raise RuntimeError("Não foi possível criar ou recuperar o produto")
-	
+
 	return ProdutoPadronizado(
 		id=row[0],
 		nome_base=row[1],
@@ -521,10 +521,10 @@ def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 def _aplicar_schema(con: sqlite3.Connection) -> None:
 	# Habilita foreign keys (desabilitado por padrão no SQLite)
 	con.execute("PRAGMA foreign_keys = ON")
-	
+
 	for ddl in _SCHEMA_DEFINITIONS:
 		con.execute(ddl)
-	
+
 	# SQLite não tem ADD COLUMN IF NOT EXISTS, então tratamos erros
 	migrations = [
 		"ALTER TABLE itens ADD COLUMN produto_id INTEGER",
@@ -535,14 +535,14 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
 	]
-	
+
 	for migration in migrations:
 		try:
 			con.execute(migration)
 		except sqlite3.OperationalError:
 			# Coluna já existe, ignora
 			pass
-	
+
 	for ddl in _VIEW_DEFINITIONS:
 		con.execute(ddl)
 
@@ -588,14 +588,14 @@ def salvar_nota(nota: NotaFiscal, *, db_path: Path | str | None = None) -> None:
 
 def remover_nota(chave_acesso: str, *, db_path: Path | str | None = None) -> bool:
 	"""Remove completamente uma nota e seus dados relacionados.
-	
+
 	Remove em cascata:
 	- Itens da nota
 	- Pagamentos da nota
 	- Classificações históricas
 	- Revisões manuais
 	- A nota em si
-	
+
 	Retorna True se a nota foi removida, False se não existia.
 	"""
 	with conexao(db_path) as con:
@@ -606,18 +606,18 @@ def remover_nota(chave_acesso: str, *, db_path: Path | str | None = None) -> boo
 				"SELECT COUNT(*) FROM notas WHERE chave_acesso = ?",
 				[chave_acesso]
 			).fetchone()
-			
+
 			if not existe or existe[0] == 0:
 				con.execute("ROLLBACK")
 				return False
-			
+
 			# Remove dados relacionados (ordem importa por causa das FKs)
 			con.execute("DELETE FROM classificacoes_historico WHERE chave_acesso = ?", [chave_acesso])
 			con.execute("DELETE FROM revisoes_manuais WHERE chave_acesso = ?", [chave_acesso])
 			con.execute("DELETE FROM itens WHERE chave_acesso = ?", [chave_acesso])
 			con.execute("DELETE FROM pagamentos WHERE chave_acesso = ?", [chave_acesso])
 			con.execute("DELETE FROM notas WHERE chave_acesso = ?", [chave_acesso])
-			
+
 			con.execute("COMMIT")
 			logger.info("Nota %s removida com sucesso do banco de dados.", chave_acesso)
 			return True
@@ -923,14 +923,23 @@ def listar_itens_para_classificacao(
 	*,
 	limit: int = 25,
 	apenas_sem_categoria: bool = True,
+	incluir_confirmados: bool = False,
 	chave_acesso: str | None = None,
 	db_path: Path | str | None = None,
 ) -> list[ItemParaClassificacao]:
 	"""Retorna itens ainda não classificados para uso pela IA."""
 
-	where_clauses = ["i.categoria_confirmada IS NULL"]
+	where_clauses = []
+	if not incluir_confirmados:
+		where_clauses.append("i.categoria_confirmada IS NULL")
 	params: list[object] = []
-	if apenas_sem_categoria:
+	# Só filtramos por categoria_sugerida (itens ainda SEM sugestão) quando
+	# NÃO estamos incluindo confirmados. Ou seja:
+	# - incluir_confirmados=False  -> pega apenas itens sem categoria_confirmada
+	#   e, se apenas_sem_categoria=True, também sem categoria_sugerida.
+	# - incluir_confirmados=True   -> reprocessa TODOS os itens, com ou sem
+	#   categoria_sugerida/categoria_confirmada (nenhum filtro extra aqui).
+	if apenas_sem_categoria and not incluir_confirmados:
 		where_clauses.append("i.categoria_sugerida IS NULL")
 	chave_normalizada = chave_acesso.strip() if chave_acesso else None
 	if chave_normalizada:
@@ -1075,7 +1084,7 @@ def registrar_classificacao_itens(
 				obs = item.get("observacoes")
 				resp_json = json.dumps(item.get("resposta_json"), ensure_ascii=False) if item.get("resposta_json") else None
 				categoria_id = _resolver_categoria_id(con, cat)
-				
+
 				# Campos de produto padronizado
 				prod_nome = item.get("produto_nome")
 				prod_marca = item.get("produto_marca")
@@ -1148,13 +1157,82 @@ def registrar_classificacao_itens(
 				con.execute(sql_update, params)
 
 			con.execute("COMMIT")
-			
+
 			# Atualizar embeddings após classificação (LLM ou cache semântico)
 			_atualizar_embeddings_pos_classificacao(dados, con)
-			
+
 		except Exception:
 			con.execute("ROLLBACK")
 			raise
+
+
+def limpar_categorias_confirmadas(
+	chave_acesso: str,
+	*,
+	db_path: Path | str | None = None,
+) -> int:
+	"""
+	Remove todas as categorias (confirmadas e sugeridas) de todos os itens de uma nota,
+	voltando ao estado pendente para reclassificação.
+
+	Note: Preserva produto_id e embeddings para permitir cache semântico.
+	Para reset completo incluindo produtos, use limpar_classificacoes_completas().
+
+	Returns:
+		Número de itens modificados
+	"""
+	with conexao(db_path) as con:
+		cursor = con.execute(
+			"""
+			UPDATE itens
+			SET
+				categoria_sugerida = NULL,
+				categoria_sugerida_id = NULL,
+				categoria_confirmada = NULL,
+				categoria_confirmada_id = NULL,
+				atualizado_em = CURRENT_TIMESTAMP
+			WHERE chave_acesso = ?
+				AND categoria_confirmada IS NOT NULL
+			""",
+			[chave_acesso.strip()],
+		)
+		return cursor.rowcount
+
+
+def limpar_classificacoes_completas(
+	chave_acesso: str,
+	*,
+	db_path: Path | str | None = None,
+) -> int:
+	"""
+	Remove TODAS as classificações (sugeridas e confirmadas) e dados de produto
+	de todos os itens de uma nota, voltando ao estado completamente zerado.
+
+	Útil para reprocessamento total forçando LLM sem cache semântico.
+
+	Returns:
+		Número de itens modificados
+	"""
+	with conexao(db_path) as con:
+		cursor = con.execute(
+			"""
+			UPDATE itens
+			SET
+				categoria_sugerida = NULL,
+				categoria_sugerida_id = NULL,
+				categoria_confirmada = NULL,
+				categoria_confirmada_id = NULL,
+				produto_id = NULL,
+				produto_nome = NULL,
+				produto_marca = NULL,
+				fonte_classificacao = NULL,
+				confianca_classificacao = NULL,
+				atualizado_em = CURRENT_TIMESTAMP
+			WHERE chave_acesso = ?
+			""",
+			[chave_acesso.strip()],
+		)
+		return cursor.rowcount
 
 
 def registrar_revisoes_manuais(
@@ -1304,34 +1382,34 @@ def _resolver_produto_por_nome_marca(
 	categoria_nome: str | None
 ) -> ProdutoPadronizado | None:
 	"""Busca ou cria um produto com base no nome e marca normalizados."""
-	
+
 	nome = nome.strip()
 	if not nome:
 		return None
-		
+
 	marca = marca.strip() if marca else None
-	
+
 	# Resolver categoria_id se categoria_nome foi fornecida
 	categoria_id = None
 	if categoria_nome:
 		cat_row = con.execute("SELECT id FROM categorias WHERE lower(nome) = lower(?)", [categoria_nome]).fetchone()
 		if cat_row:
 			categoria_id = cat_row[0]
-	
+
 	# Tenta achar exato
 	query_busca = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
 	params_busca = [nome]
-	
+
 	if marca:
 		query_busca += " AND lower(marca_base) = lower(?)"
 		params_busca.append(marca)
 	else:
 		query_busca += " AND marca_base IS NULL"
-		
+
 	row = con.execute(query_busca, params_busca).fetchone()
 	if row:
 		produto_id, nome_base, marca_base, categoria_id_atual = row[0], row[1], row[2], row[3]
-		
+
 		# Se o produto existe sem categoria e recebemos uma categoria válida, atualiza
 		if categoria_id_atual is None and categoria_id is not None:
 			try:
@@ -1343,9 +1421,9 @@ def _resolver_produto_por_nome_marca(
 				return ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=categoria_id)
 			except Exception as e:
 				logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
-		
+
 		return ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=categoria_id_atual)
-		
+
 	# Se não achou, cria com a categoria se disponível
 	try:
 		con.execute(
@@ -1360,16 +1438,16 @@ def _resolver_produto_por_nome_marca(
 		# Na verdade, com RETURNING é melhor:
 		# row_id = con.execute("INSERT ... RETURNING id").fetchone()
 		# Mas vamos manter o padrão de busca pós-insert se o driver antigo não suportar
-		
+
 		# Vamos tentar buscar de novo
 		row = con.execute(query_busca, params_busca).fetchone()
 		if row:
 			return ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
-			
+
 	except Exception:
 		# Pode ter havido concorrência
 		pass
-		
+
 	return None
 
 
@@ -1517,7 +1595,7 @@ def _resolver_produto_por_descricao(
 	con: sqlite3.Connection, descricao: str
 ) -> ProdutoPadronizado | None:
 	"""Tenta encontrar um produto existente via alias ou cria um novo baseado na descrição."""
-	
+
 	# 1. Busca exata na tabela de aliases
 	row = con.execute(
 		"""
@@ -1528,7 +1606,7 @@ def _resolver_produto_por_descricao(
 		""",
 		[descricao.strip()]
 	).fetchone()
-	
+
 	if row:
 		return ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
 
@@ -1545,9 +1623,9 @@ def _resolver_produto_por_descricao(
 		params.append(marca_base)
 	else:
 		query += " AND marca_base IS NULL"
-		
+
 	row = con.execute(query, params).fetchone()
-	
+
 	produto_id = None
 	if row:
 		produto = ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
@@ -1577,7 +1655,7 @@ def _resolver_produto_por_descricao(
 		)
 	except Exception:
 		pass # Alias já existe ou erro de constraint
-		
+
 	return produto
 
 
@@ -1605,7 +1683,7 @@ def _atualizar_embeddings_pos_validacao(
 	db_path: Path | str | None = None
 ) -> None:
 	"""Atualiza embeddings no ChromaDB após validação manual do usuário.
-	
+
 	Para cada item validado, indexa a descrição original com:
 	- nome_base (produto validado)
 	- marca_base (marca validada)
@@ -1616,33 +1694,33 @@ def _atualizar_embeddings_pos_validacao(
 	except ImportError:
 		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
 		return
-	
+
 	with conexao(db_path) as con:
 		for item in itens_validados:
 			chave = item.get("chave_acesso")
 			seq = item.get("sequencia")
-			
+
 			if not chave or seq is None:
 				continue
-			
+
 			# Busca descrição original do item
 			row = con.execute(
 				"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
 				[chave, seq]
 			).fetchone()
-			
+
 			if not row or not row[0]:
 				continue
-			
+
 			descricao_original = row[0]
 			produto_nome = item.get("produto_nome")
 			produto_marca = item.get("produto_marca")
 			categoria = item.get("categoria")
-			
+
 			# Só atualiza se tiver pelo menos nome e categoria
 			if not produto_nome or not categoria:
 				continue
-			
+
 			try:
 				upsert_descricao_embedding(
 					descricao_original=descricao_original,
@@ -1665,39 +1743,39 @@ def _atualizar_embeddings_pos_classificacao(
 	con: sqlite3.Connection
 ) -> None:
 	"""Atualiza embeddings após classificação automática (LLM ou cache).
-	
+
 	Registra descrições originais com suas classificações para reutilização futura.
 	"""
 	try:
 		from src.classifiers.embeddings import upsert_descricao_embedding
 	except ImportError:
 		return
-	
+
 	for item in dados_classificacao:
 		chave = item.get("chave_acesso")
 		seq = item.get("sequencia")
-		
+
 		if not chave or seq is None:
 			continue
-		
+
 		# Busca descrição original
 		row = con.execute(
 			"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
 			[chave, seq]
 		).fetchone()
-		
+
 		if not row or not row[0]:
 			continue
-		
+
 		descricao_original = row[0]
 		produto_nome = item.get("produto_nome")
 		categoria = item.get("categoria")
 		produto_marca = item.get("produto_marca")
-		
+
 		# Só registra se tiver nome e categoria (classificação completa)
 		if not produto_nome or not categoria:
 			continue
-		
+
 		try:
 			upsert_descricao_embedding(
 				descricao_original=descricao_original,
@@ -1823,7 +1901,7 @@ def _obter_ou_criar_estabelecimento(
 			return est_id
 	if not nome and not normalizado and not endereco:
 		return None
-	
+
 	cursor = con.execute(
 		"""
 		INSERT INTO estabelecimentos (nome, cnpj, cnpj_normalizado, endereco)
@@ -1848,16 +1926,16 @@ def _consolidar_estabelecimento(
 		"SELECT nome, cnpj, cnpj_normalizado, endereco FROM estabelecimentos WHERE id = ?",
 		[est_id]
 	).fetchone()
-	
+
 	if not row:
 		return
-	
+
 	nome_atual, cnpj_atual, cnpj_norm_atual, endereco_atual = row
-	
+
 	# Só atualiza campos que estão NULL/vazios no banco
 	campos: list[str] = []
 	parametros: list[object] = []
-	
+
 	if nome and not nome_atual:
 		campos.append("nome = ?")
 		parametros.append(nome)
@@ -1870,10 +1948,10 @@ def _consolidar_estabelecimento(
 	if endereco and not endereco_atual:
 		campos.append("endereco = ?")
 		parametros.append(endereco)
-	
+
 	if not campos:
 		return
-	
+
 	set_clause = ", ".join(campos + ["atualizado_em = CURRENT_TIMESTAMP"])
 	parametros.append(est_id)
 	query = f"UPDATE estabelecimentos SET {set_clause} WHERE id = ?"
@@ -1928,7 +2006,7 @@ def _converter_data_iso(texto: str | None) -> str | None:
 		return dt.isoformat()
 	except ValueError:
 		pass
-	
+
 	try:
 		dt = datetime.strptime(texto.strip(), "%d/%m/%Y")
 		return dt.date().isoformat()
@@ -1982,10 +2060,10 @@ def obter_kpis_gerais(*, db_path: Path | str | None = None) -> dict[str, Any]:
 	with conexao(db_path) as con:
 		# Total de notas
 		total_notas_row = con.execute("SELECT COUNT(*) FROM notas").fetchone()
-		
+
 		# Total gasto (soma de valor_total das notas)
 		total_gasto_row = con.execute("SELECT SUM(valor_total) FROM notas").fetchone()
-		
+
 		# Itens pendentes de classificação
 		itens_pendentes_row = con.execute(
 			"SELECT COUNT(*) FROM itens WHERE categoria_confirmada IS NULL"
@@ -2012,7 +2090,7 @@ def obter_resumo_mensal(*, db_path: Path | str | None = None) -> list[dict[str, 
 			LIMIT 12
 			"""
 		).fetchall()
-	
+
 	return [
 		{"mes": row[0], "total": float(_para_decimal(row[1]) or Decimal("0.00"))}
 		for row in rows
@@ -2021,14 +2099,14 @@ def obter_resumo_mensal(*, db_path: Path | str | None = None) -> list[dict[str, 
 
 def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | str | None = None) -> list[dict[str, Any]]:
 	"""Retorna gastos agrupados por categoria. Opcionalmente filtra por mês."""
-	
+
 	where_clause = "WHERE i.categoria_confirmada IS NOT NULL"
 	params = []
-	
+
 	if mes_iso:
 		where_clause += " AND strftime(CAST(n.emissao_iso AS DATE), '%Y-%m') = ?"
 		params.append(mes_iso)
-		
+
 	query = f"""
 		SELECT i.categoria_confirmada, SUM(i.valor_total)
 		FROM itens i
@@ -2037,10 +2115,10 @@ def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | st
 		GROUP BY 1
 		ORDER BY 2 DESC
 	"""
-	
+
 	with conexao(db_path) as con:
 		rows = con.execute(query, params).fetchall()
-		
+
 	return [
 		{"categoria": row[0], "total": float(_para_decimal(row[1]) or Decimal("0.00"))}
 		for row in rows
@@ -2055,22 +2133,22 @@ def obter_top_produtos_por_quantidade(
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
 	"""Retorna os produtos mais comprados por quantidade total no período.
-	
+
 	Agrupa por produto_nome (ignorando marcas), retornando nome do produto
 	e quantidade total comprada.
 	"""
 	filtros = ["i.produto_nome IS NOT NULL", "n.emissao_data IS NOT NULL"]
 	params: list[object] = []
-	
+
 	if data_inicio:
 		filtros.append("n.emissao_data >= ?")
 		params.append(data_inicio)
 	if data_fim:
 		filtros.append("n.emissao_data <= ?")
 		params.append(data_fim)
-	
+
 	where_clause = " AND ".join(filtros)
-	
+
 	query = f"""
 		SELECT
 			i.produto_nome,
@@ -2083,10 +2161,10 @@ def obter_top_produtos_por_quantidade(
 		LIMIT ?
 	"""
 	params.append(top_n)
-	
+
 	with conexao(db_path) as con:
 		rows = con.execute(query, params).fetchall()
-	
+
 	return [
 		{
 			"produto_nome": row[0],
@@ -2104,30 +2182,30 @@ def obter_custos_unitarios_mensais(
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
 	"""Retorna custos unitários médios mensais para uma lista de produtos.
-	
+
 	Para cada produto e mês, calcula o custo unitário médio ponderado.
 	Retorna lista com: produto_nome, ano_mes, custo_unitario_medio.
 	"""
 	if not produtos:
 		return []
-	
+
 	filtros = ["i.produto_nome IN ({})".format(",".join("?" * len(produtos)))]
 	params: list[object] = list(produtos)
-	
+
 	filtros.append("n.emissao_data IS NOT NULL")
 	filtros.append("i.quantidade IS NOT NULL")
 	filtros.append("i.quantidade > 0")
 	filtros.append("i.valor_unitario IS NOT NULL")
-	
+
 	if data_inicio:
 		filtros.append("n.emissao_data >= ?")
 		params.append(data_inicio)
 	if data_fim:
 		filtros.append("n.emissao_data <= ?")
 		params.append(data_fim)
-	
+
 	where_clause = " AND ".join(filtros)
-	
+
 	query = f"""
 		SELECT
 			i.produto_nome,
@@ -2139,10 +2217,10 @@ def obter_custos_unitarios_mensais(
 		GROUP BY i.produto_nome, ano_mes
 		ORDER BY i.produto_nome, ano_mes
 	"""
-	
+
 	with conexao(db_path) as con:
 		rows = con.execute(query, params).fetchall()
-	
+
 	return [
 		{
 			"produto_nome": row[0],
@@ -2161,7 +2239,7 @@ def obter_unidades_produtos(
 	"""Retorna mapeamento de produto_nome para unidade mais comum."""
 	if not produtos:
 		return {}
-	
+
 	placeholders = ",".join("?" * len(produtos))
 	query = f"""
 		SELECT
@@ -2174,10 +2252,10 @@ def obter_unidades_produtos(
 		GROUP BY produto_nome, unidade
 		ORDER BY produto_nome, freq DESC
 	"""
-	
+
 	with conexao(db_path) as con:
 		rows = con.execute(query, list(produtos)).fetchall()
-	
+
 	# Pega a unidade mais frequente para cada produto
 	unidades: dict[str, str] = {}
 	for row in rows:
@@ -2185,7 +2263,7 @@ def obter_unidades_produtos(
 		unidade = row[1]
 		if produto not in unidades:
 			unidades[produto] = unidade
-	
+
 	return unidades
 
 
@@ -2197,29 +2275,29 @@ def obter_quantidades_mensais_produtos(
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
 	"""Retorna quantidades compradas mensalmente para uma lista de produtos.
-	
+
 	Para cada produto e mês, retorna a quantidade total comprada.
 	Retorna lista com: produto_nome, ano_mes, quantidade_total.
 	"""
 	if not produtos:
 		return []
-	
+
 	filtros = ["i.produto_nome IN ({})".format(",".join("?" * len(produtos)))]
 	params: list[object] = list(produtos)
-	
+
 	filtros.append("n.emissao_data IS NOT NULL")
 	filtros.append("i.quantidade IS NOT NULL")
 	filtros.append("i.quantidade > 0")
-	
+
 	if data_inicio:
 		filtros.append("n.emissao_data >= ?")
 		params.append(data_inicio)
 	if data_fim:
 		filtros.append("n.emissao_data <= ?")
 		params.append(data_fim)
-	
+
 	where_clause = " AND ".join(filtros)
-	
+
 	query = f"""
 		SELECT
 			i.produto_nome,
@@ -2231,10 +2309,10 @@ def obter_quantidades_mensais_produtos(
 		GROUP BY i.produto_nome, ano_mes
 		ORDER BY i.produto_nome, ano_mes
 	"""
-	
+
 	with conexao(db_path) as con:
 		rows = con.execute(query, params).fetchall()
-	
+
 	return [
 		{
 			"produto_nome": row[0],

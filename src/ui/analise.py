@@ -21,9 +21,26 @@ MODELOS_IA = obter_modelos_com_nomes_amigaveis()
 
 
 @st.dialog("Escolher modelo de IA")
-def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int) -> None:
+def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int, total_itens: int) -> None:
     """Diálogo para escolher qual modelo de IA usar para reprocessamento."""
-    st.write("Selecione qual IA deseja usar para classificar os itens pendentes:")
+    st.write("Selecione qual IA deseja usar para classificar os itens:")
+
+    # NOVO: Checkbox para escolher escopo com session state
+    key_checkbox = f"reprocessar_todos_{chave_acesso}"
+
+    reprocessar_todos = st.checkbox(
+        f"Reprocessar TODOS os {total_itens} itens da nota (incluindo já confirmados)",
+        key=key_checkbox,
+        help="Se marcado, todos os itens da nota serão reclassificados, "
+             "removendo as classificações confirmadas anteriormente. "
+             "Se desmarcado, apenas itens pendentes serão processados.",
+    )
+
+    if reprocessar_todos:
+        st.warning(
+            "⚠️ As categorias já confirmadas serão removidas e "
+            "todos os itens voltarão ao estado pendente."
+        )
 
     modelo_escolhido = st.radio(
         "Modelo de IA",
@@ -39,33 +56,56 @@ def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int) -> None:
 
     if col2.button("Processar", type="primary", use_container_width=True):
         modelo_selecionado = MODELOS_IA[modelo_escolhido]
+        # Usar diretamente o valor atual do checkbox
+        reprocessar_todos_value = reprocessar_todos
+
+        # Placeholder para feedback de progresso
+        progresso_placeholder = st.empty()
+
+        def _progress_callback(mensagem: str) -> None:
+            """Callback para exibir progresso em tempo real."""
+            progresso_placeholder.info(f"⏳ {mensagem}")
 
         try:
-            with st.spinner(f"Processando com {modelo_escolhido}..."):
+            escopo_msg = "todos os itens" if reprocessar_todos_value else "itens pendentes"
+            modo_msg = " (modo LLM-only)" if reprocessar_todos_value else ""
+
+            with st.spinner(f"Processando {escopo_msg} com {modelo_escolhido}{modo_msg}..."):
                 resultados = classificar_itens_pendentes(
                     limit=limite_classificacao,
                     confirmar=False,
                     chave_acesso=chave_acesso,
                     model=modelo_selecionado,
+                    incluir_confirmados=reprocessar_todos_value,
+                    limpar_confirmadas_antes=reprocessar_todos_value,
+                    forcar_llm=reprocessar_todos_value,
+                    progress_callback=_progress_callback,
                 )
+
+            # Limpar mensagem de progresso após conclusão
+            progresso_placeholder.empty()
+
         except Exception as exc:
+            progresso_placeholder.empty()
             st.error(f"Erro ao processar: {exc}")
             return
 
         # Armazenar resultado em session_state
         fila = st.session_state.setdefault("flash_analisar_msgs", [])
         if resultados:
+            escopo_msg = "todos os itens" if reprocessar_todos_value else "item(ns) pendente(s)"
+            modo_info = " via LLM direto" if reprocessar_todos_value else ""
             fila.append(
                 {
                     "tipo": "success",
-                    "texto": f"{len(resultados)} item(ns) reprocessado(s) com {modelo_escolhido}.",
+                    "texto": f"{len(resultados)} {escopo_msg} reprocessado(s) com {modelo_escolhido}{modo_info}.",
                 }
             )
         else:
             fila.append(
                 {
                     "tipo": "info",
-                    "texto": "Nenhum item pendente estava disponível para reprocessamento.",
+                    "texto": "Nenhum item estava disponível para reprocessamento.",
                 }
             )
         st.session_state["nota_em_revisao"] = chave_acesso
@@ -168,17 +208,21 @@ def render_pagina_analise() -> None:
     df_base = _montar_editor(itens)
 
     itens_pendentes_total = int(nota.itens_pendentes or 0)
+    total_itens_nota = int(nota.total_itens or 0)
+
+    # Botão habilitado se houver itens (pendentes ou não)
     botao_reprocessar = st.button(
-        "Reprocessar itens pendentes via IA",
+        "Reprocessar itens via IA",
         type="secondary",
-        disabled=itens_pendentes_total == 0,
-        help="Envia todos os itens ainda sem categoria confirmada para a classificação automática.",
+        disabled=total_itens_nota == 0,
+        help="Classifica ou reclassifica os itens da nota usando IA. "
+             "Você pode escolher processar apenas pendentes ou todos os itens.",
     )
 
-    if botao_reprocessar and itens_pendentes_total > 0:
-        limite_classificacao = max(itens_pendentes_total, len(itens), 1)
+    if botao_reprocessar:
+        limite_classificacao = max(total_itens_nota, len(itens), 1)
         # Abrir diálogo para escolher a IA
-        _dialogo_escolher_ia(nota.chave_acesso, limite_classificacao)
+        _dialogo_escolher_ia(nota.chave_acesso, limite_classificacao, total_itens_nota)
 
     with st.form(f"form_revisao_{nota.chave_acesso}"):
         st.write("Ajuste os campos necessários e escolha salvar rascunho ou confirmar.")
