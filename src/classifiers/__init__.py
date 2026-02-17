@@ -42,8 +42,6 @@ def classificar_itens_pendentes(
 	limpar_confirmadas_antes: bool = False,
 	forcar_llm: bool = False,
 ) -> list[ClassificacaoResultado]:
-	"""Busca itens sem categoria, envia para o LLM configurado e persiste o resultado.
-
 	"""Busca itens pendentes de classificação, aplica classificação híbrida e persiste o resultado.
 
 	A ordem do pipeline é:
@@ -116,7 +114,7 @@ def classificar_itens_pendentes(
 							f"Limpas {num_limpos} classificações anteriores (modo full reset)."
 						)
 			else:
-				# Modo parcial: limpar apenas confirmadas
+				# Modo parcial: limpar apenas categorias confirmadas
 				num_limpos = limpar_categorias_confirmadas(chave_acesso, db_path=db_path)
 				if num_limpos > 0:
 					logger.info(
