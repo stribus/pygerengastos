@@ -29,7 +29,7 @@ class TestNormalizacaoNomeProduto:
 		assert "2l" in resultado
 
 	def test_preserva_multiplos_tamanhos(self) -> None:
-		"""Preservation de múltiplos tamanhos."""
+		"""Preservação de múltiplos tamanhos."""
 		resultado = normalizar_nome_produto_universal("POWER SHOCK MENTA SPRAY 15ml SEXY FANTASY")
 		assert "Power Shock" in resultado
 		assert "15ml" in resultado

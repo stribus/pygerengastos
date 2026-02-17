@@ -620,6 +620,8 @@ def normalizar_nome_produto_universal(nome: str) -> str:
 def _aplicar_schema(con: sqlite3.Connection) -> None:
 	"""Cria tabelas e views se não existirem."""
 
+	# Garantir que constraints de chave estrangeira sejam aplicadas nesta conexão
+	con.execute("PRAGMA foreign_keys = ON")
 	# Criar tabelas
 	for ddl in _SCHEMA_DEFINITIONS:
 		con.execute(ddl)
@@ -2565,9 +2567,6 @@ def consolidar_produtos(
 	with conexao(db_path) as con:
 		con.execute("BEGIN TRANSACTION")
 		try:
-			# Desabilitar foreign keys temporariamente
-			con.execute("PRAGMA foreign_keys = OFF")
-
 			# Buscar dados do produto origem e destino
 			origem_row = con.execute(
 				"SELECT nome_base, marca_base FROM produtos WHERE id = ?",
@@ -2580,7 +2579,6 @@ def consolidar_produtos(
 			).fetchone()
 
 			if not origem_row or not destino_row:
-				con.execute("PRAGMA foreign_keys = ON")
 				con.execute("ROLLBACK")
 				raise ValueError(f"Produto origem ({produto_id_origem}) ou destino ({produto_id_destino}) não encontrado")
 
@@ -2636,10 +2634,11 @@ def consolidar_produtos(
 					)
 					aliases_migrados += 1
 
-			# Deletar aliases antigos
+			# Deletar aliases antigos (agora todos já foram migrados)
 			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
 
-			# Deletar produto origem
+			# Deletar produto origem (agora sem referências dangling)
+			# Foreign keys estão habilitadas - se falhar, há um bug
 			con.execute("DELETE FROM produtos WHERE id = ?", [produto_id_origem])
 
 			# Registrar auditoria (temporariamente com 0 embeddings, atualiza depois)
@@ -2662,8 +2661,7 @@ def consolidar_produtos(
 				]
 			)
 
-			# Reabilitar foreign keys
-			con.execute("PRAGMA foreign_keys = ON")
+			# Commit da transação (foreign keys sempre habilitadas)
 			con.execute("COMMIT")
 
 			logger.info(
@@ -2675,7 +2673,6 @@ def consolidar_produtos(
 			)
 
 		except Exception as exc:
-			con.execute("PRAGMA foreign_keys = ON")
 			con.execute("ROLLBACK")
 			logger.exception("Erro ao consolidar produtos: %s", exc)
 			raise

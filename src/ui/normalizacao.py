@@ -254,7 +254,7 @@ def render_pagina_normalizacao() -> None:
 			)
 
 			# Processar seleção
-			selecionados = df_editado[df_editado["selecionar"] == True]
+			selecionados = df_editado[df_editado["selecionar"]]
 
 			if len(selecionados) >= 2:
 				st.warning(

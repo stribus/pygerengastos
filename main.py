@@ -57,6 +57,8 @@ def main() -> None:
 			render_pagina_analise()
 		elif opcao == "Normalizar Produtos":
 			render_pagina_normalizacao()
+		elif opcao == "Relatórios":
+			render_pagina_relatorios()
 
 if __name__ == "__main__":
 	main()
