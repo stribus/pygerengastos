@@ -88,7 +88,7 @@ dist/
 └── pygerengastos/
     ├── .venv/              # Ambiente virtual completo
     ├── src/                # Código fonte
-    ├── data/               # Dados e configurações
+    ├── data/               # Dados e configurações (inclui modelos LLM, ex: modelos_llm.toml)
     ├── main.py             # Entry point
     ├── start.bat           # Executável Windows
     ├── start.ps1           # Script PowerShell

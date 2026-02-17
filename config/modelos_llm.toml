@@ -1,0 +1,37 @@
+# Configurações dos modelos de LLM
+# A prioridade é definida pela ordem neste arquivo.
+
+[[modelos]]
+nome = "gemini/gemini-2.5-flash-lite"
+nome_amigavel = "Gemini 2.5 Flash Lite (Padrão)"
+api_key_env = "GEMINI_API_KEY"
+max_tokens = 8000
+max_itens = 50
+timeout = 30.0
+
+[[modelos]]
+nome = "nvidia_nim/meta/llama3-70b-instruct"
+nome_amigavel = "LLaMA 3 70B (NVIDIA)"
+api_key_env = "NVIDIA_API_KEY"
+max_tokens = 4096
+max_itens = 20
+timeout = 45.0
+
+[[modelos]]
+nome = "nvidia_nim/moonshotai/kimi-k2.5"
+nome_amigavel = "Kimi K2.5 (Moonshot AI)"
+api_key_env = "NVIDIA_API_KEY"
+max_tokens = 8192
+max_itens = 25
+timeout = 45.0
+# Configuração específica do Kimi K2.5: desabilita modo thinking
+[modelos.extra_body.chat_template_kwargs]
+thinking = false
+
+[[modelos]]
+nome = "openai/gpt-4o"
+nome_amigavel = "GPT-4o (OpenAI)"
+api_key_env = "OPENAI_API_KEY"
+max_tokens = 4096
+max_itens = 30
+timeout = 30.0

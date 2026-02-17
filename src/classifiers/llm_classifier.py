@@ -5,9 +5,12 @@ from decimal import Decimal
 from pathlib import Path
 from importlib import import_module
 from typing import Any, Callable, Iterable, Sequence, cast
+import concurrent.futures
 import json
 import os
 import textwrap
+import threading
+import tomllib
 
 from litellm import completion
 
@@ -17,10 +20,18 @@ from src.logger import setup_logging
 logger = setup_logging(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_FILE = PROJECT_ROOT / "config" / "modelos_llm.toml"
 DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 DEFAULT_MAX_TOKENS = 8000
 MAX_ITENS_POR_CHAMADA = 50
+BACKGROUND_LOAD_TIMEOUT = 5.0  # Timeout em segundos para aguardar carregamento em background
 _ENV_LOADED = False
+
+# Cache thread-safe para modelos carregados
+_modelos_cache: list[ModeloConfig] | None = None
+_modelos_cache_lock = threading.Lock()
+_carregamento_em_andamento: concurrent.futures.Future[list[ModeloConfig]] | None = None
+_carregamento_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -30,54 +41,215 @@ class ModeloConfig:
 	max_tokens: int
 	max_itens: int
 	timeout: float
+	nome_amigavel: str | None = None
 	extra_body: dict[str, Any] | None = None
 
 
-DEFAULT_MODELOS = [
-	ModeloConfig(
-		nome="gemini/gemini-2.5-flash-lite",
-		api_key_env="GEMINI_API_KEY",
-		max_tokens=DEFAULT_MAX_TOKENS,
-		max_itens=MAX_ITENS_POR_CHAMADA,
-		timeout=30.0,
-	),
-	ModeloConfig(
-		nome="nvidia_nim/meta/llama3-70b-instruct",
-		api_key_env="NVIDIA_API_KEY",
-		max_tokens=4096,
-		max_itens=20,
-		timeout=45.0,
-	),
-	ModeloConfig(
-		nome="nvidia_nim/moonshotai/kimi-k2.5",
-		api_key_env="NVIDIA_API_KEY",
-		max_tokens=8192,
-		max_itens=25,
-		timeout=45.0,
-		extra_body={"chat_template_kwargs": {"thinking": False}},
-	),
-	ModeloConfig(
-		nome="openai/gpt-4o",
-		api_key_env="OPENAI_API_KEY",
-		max_tokens=4096,
-		max_itens=30,
-		timeout=30.0,
-	),
-]
+def _obter_modelos_fallback() -> list[ModeloConfig]:
+	"""
+	Retorna configuração mínima hardcoded para Gemini quando TOML falha.
+	
+	Este fallback garante que o sistema nunca fique em estado degradado silencioso.
+	"""
+	logger.warning("Usando configuração fallback hardcoded para Gemini")
+	return [
+		ModeloConfig(
+			nome=DEFAULT_MODEL,
+			api_key_env="GEMINI_API_KEY",
+			max_tokens=DEFAULT_MAX_TOKENS,
+			max_itens=MAX_ITENS_POR_CHAMADA,
+			timeout=30.0,
+			nome_amigavel="Gemini 2.5 Flash Lite (Fallback)",
+			extra_body=None
+		)
+	]
 
 
-# Mapeamento de IDs de modelos para nomes amigáveis
-_NOMES_AMIGAVEIS = {
-	"gemini/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite (Padrão)",
-	"nvidia_nim/meta/llama3-70b-instruct": "LLaMA 3 70B (NVIDIA)",
-	"nvidia_nim/moonshotai/kimi-k2.5": "Kimi K2.5 (Moonshot AI)",
-	"openai/gpt-4o": "GPT-4o (OpenAI)",
-}
+def _carregar_modelos_toml() -> list[ModeloConfig]:
+	"""Carrega configurações de modelos do arquivo TOML."""
+	if not CONFIG_FILE.exists():
+		logger.error(f"Arquivo de configuração não encontrado: {CONFIG_FILE}")
+		return _obter_modelos_fallback()
+
+	try:
+		with open(CONFIG_FILE, "rb") as f:
+			data = tomllib.load(f)
+
+		modelos: list[ModeloConfig] = []
+		for idx, m in enumerate(data.get("modelos", [])):
+			# Validação explícita de campos obrigatórios para evitar KeyError silencioso
+			campos_obrigatorios = ("nome", "api_key_env")
+			campos_ausentes = [campo for campo in campos_obrigatorios if campo not in m]
+			if campos_ausentes:
+				logger.error(
+					f"Modelo na posição {idx} em {CONFIG_FILE} está malformado: "
+					f"campos obrigatórios ausentes: {', '.join(campos_ausentes)}. "
+					f"Entrada: {m!r}"
+				)
+				continue
+
+			try:
+				modelos.append(ModeloConfig(
+					nome=m["nome"],
+					api_key_env=m["api_key_env"],
+					max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
+					max_itens=m.get("max_itens", MAX_ITENS_POR_CHAMADA),
+					timeout=float(m.get("timeout", 30.0)),
+					nome_amigavel=m.get("nome_amigavel"),
+					extra_body=m.get("extra_body")
+				))
+			except Exception as e_modelo:
+				logger.error(
+					f"Erro ao processar modelo na posição {idx} "
+					f"({m.get('nome', '<sem nome>')}): {e_modelo}"
+				)
+		
+		if not modelos:
+			logger.error(f"Nenhum modelo válido encontrado em {CONFIG_FILE}, usando fallback")
+			return _obter_modelos_fallback()
+		
+		logger.info(f"Carregados {len(modelos)} modelos de LLM de {CONFIG_FILE}")
+		return modelos
+	except FileNotFoundError:
+		# Arquivo pode ter sido removido entre o exists() e o open()
+		logger.error(f"Arquivo de configuração não encontrado durante a leitura: {CONFIG_FILE}")
+		return _obter_modelos_fallback()
+	except tomllib.TOMLDecodeError as e:
+		logger.error(f"Erro de sintaxe TOML em {CONFIG_FILE}: {e}")
+		return _obter_modelos_fallback()
+	except (OSError, IOError) as e:
+		logger.error(f"Erro de E/S ao ler arquivo de configuração {CONFIG_FILE}: {e}")
+		return _obter_modelos_fallback()
+	except Exception as e:
+		# Qualquer outro erro inesperado
+		logger.exception(f"Erro inesperado ao carregar {CONFIG_FILE}: {e}")
+		return _obter_modelos_fallback()
+
+
+def iniciar_carregamento_background() -> concurrent.futures.Future[list[ModeloConfig]]:
+	"""
+	Inicia carregamento de modelos em background thread.
+	
+	Retorna:
+		Future que será resolvido quando os modelos forem carregados.
+	"""
+	global _carregamento_em_andamento
+	
+	with _carregamento_lock:
+		if _carregamento_em_andamento is not None:
+			logger.debug("Carregamento em andamento já existe, reutilizando")
+			return _carregamento_em_andamento
+		
+		logger.info("Iniciando carregamento de modelos LLM em background")
+		executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-loader")
+		_carregamento_em_andamento = executor.submit(_carregar_modelos_toml)
+		
+		# Cleanup do executor após conclusão
+		def _cleanup(_future: concurrent.futures.Future) -> None:
+			executor.shutdown(wait=False)
+		
+		_carregamento_em_andamento.add_done_callback(_cleanup)
+		return _carregamento_em_andamento
+
+
+def obter_modelos_carregados(aguardar: bool = True) -> list[ModeloConfig]:
+	"""
+	Retorna modelos carregados, usando cache se disponível.
+	
+	Args:
+		aguardar: Se True, aguarda carregamento em background se ainda não concluído.
+		         Se False, retorna fallback se cache vazio e carregamento pendente.
+	
+	Retorna:
+		Lista de ModeloConfig carregados do TOML ou fallback.
+	"""
+	global _modelos_cache, _carregamento_em_andamento
+	
+	# Fast path: cache já populado (sem lock para performance)
+	if _modelos_cache is not None:
+		return _modelos_cache
+	
+	# Slow path: precisa carregar ou aguardar carregamento
+	# Usa lock do cache para evitar race conditions
+	with _modelos_cache_lock:
+		# Double-check: outro thread pode ter populado cache enquanto esperávamos lock
+		if _modelos_cache is not None:
+			return _modelos_cache
+		
+		# Se há carregamento em andamento
+		with _carregamento_lock:
+			future = _carregamento_em_andamento
+		
+		if future is not None:
+			if aguardar:
+				logger.debug("Aguardando conclusão do carregamento em background")
+				try:
+					modelos = future.result(timeout=BACKGROUND_LOAD_TIMEOUT)
+				except concurrent.futures.TimeoutError:
+					logger.warning("Timeout aguardando carregamento, usando fallback")
+					modelos = _obter_modelos_fallback()
+				except Exception as e:
+					logger.exception(f"Erro no carregamento em background: {e}")
+					modelos = _obter_modelos_fallback()
+			else:
+				# Não aguardar, usar fallback
+				if future.done():
+					try:
+						modelos = future.result()
+					except Exception as e:
+						logger.exception(f"Erro ao obter resultado do future: {e}")
+						modelos = _obter_modelos_fallback()
+				else:
+					logger.debug("Carregamento em andamento, retornando fallback sem aguardar")
+					modelos = _obter_modelos_fallback()
+		else:
+			# Sem carregamento em andamento, carregar agora de forma síncrona
+			# Já estamos dentro do lock, então apenas um thread faz isso
+			logger.debug("Sem carregamento em andamento, carregando de forma síncrona")
+			modelos = _carregar_modelos_toml()
+		
+		# Atualizar cache (já dentro do lock)
+		_modelos_cache = modelos
+		return modelos
+
+
+def recarregar_modelos() -> list[ModeloConfig]:
+	"""
+	Recarrega configurações de modelos do TOML, invalidando cache.
+	
+	Útil para atualizar configurações sem reiniciar a aplicação.
+	
+	Retorna:
+		Lista de modelos recarregados.
+	"""
+	global _modelos_cache, _carregamento_em_andamento
+	
+	logger.info("Recarregando configurações de modelos LLM")
+	
+	# Invalidar cache
+	with _modelos_cache_lock:
+		_modelos_cache = None
+	
+	# Cancelar carregamento em andamento se existir
+	with _carregamento_lock:
+		if _carregamento_em_andamento is not None:
+			_carregamento_em_andamento.cancel()
+			_carregamento_em_andamento = None
+	
+	# Carregar de forma síncrona
+	modelos = _carregar_modelos_toml()
+	
+	# Atualizar cache
+	with _modelos_cache_lock:
+		_modelos_cache = modelos
+	
+	logger.info(f"Modelos recarregados: {len(modelos)} disponíveis")
+	return modelos
 
 
 def obter_modelos_disponiveis() -> list[str]:
 	"""Retorna a lista de IDs de modelos disponíveis."""
-	return [modelo.nome for modelo in DEFAULT_MODELOS]
+	return [modelo.nome for modelo in obter_modelos_carregados()]
 
 
 def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
@@ -94,10 +266,13 @@ def obter_modelos_com_nomes_amigaveis() -> dict[str, str]:
 			...
 		}
 
-	Nota: Se um modelo não tiver nome amigável definido em _NOMES_AMIGAVEIS,
+	Nota: Se um modelo não tiver nome amigável definido no TOML,
 	      o ID do modelo será usado como chave (fallback).
 	"""
-	return {_NOMES_AMIGAVEIS.get(modelo.nome, modelo.nome): modelo.nome for modelo in DEFAULT_MODELOS}
+	return {
+		(modelo.nome_amigavel or modelo.nome): modelo.nome
+		for modelo in obter_modelos_carregados()
+	}
 
 
 @dataclass
@@ -139,50 +314,6 @@ class _RespostaLLM:
 
 LoadDotenvCallable = Callable[..., bool]
 _LOAD_DOTENV_FUNC: LoadDotenvCallable | None = None
-
-
-def _normalizar_chave_modelo_env(nome_modelo: str) -> str:
-	texto = "".join((ch if ch.isalnum() else "_") for ch in nome_modelo)
-	return texto.upper()
-
-
-def _ler_int_env(nome: str, padrao: int) -> int:
-	valor = os.getenv(nome)
-	if not valor:
-		return padrao
-	try:
-		return int(valor)
-	except ValueError:
-		return padrao
-
-
-def _ler_float_env(nome: str, padrao: float) -> float:
-	valor = os.getenv(nome)
-	if not valor:
-		return padrao
-	try:
-		return float(valor)
-	except ValueError:
-		return padrao
-
-
-def _carregar_configs_modelo() -> dict[str, ModeloConfig]:
-	configs: dict[str, ModeloConfig] = {}
-	for modelo in DEFAULT_MODELOS:
-		chave_env = _normalizar_chave_modelo_env(modelo.nome)
-		api_key_env = os.getenv(f"LLM_MODEL_{chave_env}_API_KEY_ENV", modelo.api_key_env)
-		max_tokens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_TOKENS", modelo.max_tokens)
-		max_itens = _ler_int_env(f"LLM_MODEL_{chave_env}_MAX_ITENS", modelo.max_itens)
-		timeout = _ler_float_env(f"LLM_MODEL_{chave_env}_TIMEOUT", modelo.timeout)
-		configs[modelo.nome] = ModeloConfig(
-			nome=modelo.nome,
-			api_key_env=api_key_env,
-			max_tokens=max_tokens,
-			max_itens=max_itens,
-			timeout=timeout,
-			extra_body=modelo.extra_body,
-		)
-	return configs
 
 
 def _get_load_dotenv() -> LoadDotenvCallable:
@@ -238,11 +369,15 @@ class LLMClassifier:
 		self._timeout = timeout
 		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
 		self._model_priority = list(model_priority) if model_priority else [self.model]
-		self._model_configs = _carregar_configs_modelo()
 		self._api_key_override: dict[str, str] = {}
 		if api_key:
 			self._api_key_override[self.model] = api_key
-		self._num_retries = _ler_int_env("LLM_NUM_RETRIES", 2)
+
+		# Configuração global de retry via env var
+		try:
+			self._num_retries = int(os.getenv("LLM_NUM_RETRIES", "2"))
+		except ValueError:
+			self._num_retries = 2
 
 	def classificar_itens(
 		self,
@@ -335,9 +470,12 @@ class LLMClassifier:
 		return [self.model]
 
 	def _obter_config_modelo(self, modelo: str) -> ModeloConfig:
-		config = self._model_configs.get(modelo)
-		if config:
-			return config
+		"""Obtém configuração do modelo do TOML ou retorna config padrão."""
+		for config in obter_modelos_carregados():
+			if config.nome == modelo:
+				return config
+
+		# Fallback para modelos não configurados no TOML
 		return ModeloConfig(
 			nome=modelo,
 			api_key_env="GEMINI_API_KEY",

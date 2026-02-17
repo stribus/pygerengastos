@@ -11,10 +11,13 @@ Se você recebeu o arquivo `pygerengastos.zip`:
 
 1. **Extraia o arquivo ZIP** em uma pasta de sua escolha (ex: `C:\Apps\pygerengastos`)
 
-2. **Configure a API do Gemini**:
-   - Acesse https://aistudio.google.com/apikey e crie uma chave API
+2. **Configure as chaves de API**:
    - Copie o arquivo `.env.example` para `.env`
-   - Edite `.env` e cole sua chave API no campo `GEMINI_API_KEY`
+   - Preencha as variáveis de API necessárias no `.env`:
+     - `GEMINI_API_KEY`: https://aistudio.google.com/apikey (obrigatório)
+     - `NVIDIA_API_KEY`: https://build.nvidia.com/ (opcional, para modelos NVIDIA)
+     - `OPENAI_API_KEY`: https://platform.openai.com/api-keys (opcional, para GPT-4o)
+   - Os modelos disponíveis e suas configurações estão em `config/modelos_llm.toml`
 
 3. **Execute a aplicação**:
    - Clique duas vezes em `start.bat` OU
@@ -81,6 +84,7 @@ uv pip install -r requirements.txt
 - **Banco de dados**: `data/gastos.db` (SQLite3)
 - **HTMLs das notas**: `data/raw_nfce/` (backup dos HTMLs originais)
 - **Índice semântico**: `data/chroma/` (embeddings para classificação)
+- **Modelos LLM**: `config/modelos_llm.toml` (configuração centralizada)
 - **Logs**: `logs/app.log` (logs rotativos, máx 5MB)
 
 ## Suporte
