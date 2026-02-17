@@ -219,7 +219,7 @@ def render_pagina_analise() -> None:
              "Você pode escolher processar apenas pendentes ou todos os itens.",
     )
 
-    if botao_reprocessar and total_itens_nota > 0:
+    if botao_reprocessar:
         limite_classificacao = max(total_itens_nota, len(itens), 1)
         # Abrir diálogo para escolher a IA
         _dialogo_escolher_ia(nota.chave_acesso, limite_classificacao, total_itens_nota)
