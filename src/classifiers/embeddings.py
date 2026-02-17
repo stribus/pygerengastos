@@ -198,42 +198,62 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
     Returns:
         Número de embeddings atualizados
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         collection = _get_collection()
 
-        # Buscar embeddings com produto_id antigo
-        resultados = collection.get(where={"produto_id": str(produto_id_antigo)})
+        # Buscar embeddings com produto_id antigo (incluindo embeddings para evitar recálculo)
+        resultados = collection.get(
+            where={"produto_id": str(produto_id_antigo)},
+            include=["embeddings", "metadatas", "documents"]
+        )
 
         if not resultados or not resultados.get("ids"):
+            logger.debug(f"Nenhum embedding encontrado para produto_id={produto_id_antigo}")
             return 0
 
         ids = resultados["ids"]
-        metadatas = resultados.get("metadatas") or []
-        documents = resultados.get("documents") or []
-        embeddings = resultados.get("embeddings")  # Pode ser None
+        metadatas = resultados.get("metadatas")
+        if metadatas is None:
+            metadatas = []
+        documents = resultados.get("documents")
+        if documents is None:
+            documents = []
+        embeddings = resultados.get("embeddings")  # Pode ser None ou numpy array
 
         if not ids:
             return 0
 
+        # Validar consistência dos dados retornados
+        if len(metadatas) != len(ids):
+            logger.warning(
+                f"Inconsistência: {len(ids)} IDs mas {len(metadatas)} metadatas. "
+                f"Abortando atualização para produto_id={produto_id_antigo}"
+            )
+            return 0
+
         # Atualizar metadata com novo produto_id
-        for i, metadata in enumerate(metadatas):
-            if metadata is None:
-                metadata = {}
-            metadata["produto_id"] = str(produto_id_novo)
-            metadatas[i] = metadata
+        for i in range(len(metadatas)):
+            if metadatas[i] is None:
+                metadatas[i] = {}
+            metadatas[i]["produto_id"] = str(produto_id_novo)
 
         # Re-inserir com novo produto_id (upsert sobrescreve)
         collection.upsert(
             ids=ids,
             metadatas=metadatas,
             documents=documents,
-            embeddings=embeddings if embeddings else None
+            embeddings=embeddings if embeddings is not None else None
         )
 
+        logger.info(
+            f"Embeddings atualizados: {len(ids)} registros migrados de "
+            f"produto_id={produto_id_antigo} para produto_id={produto_id_novo}"
+        )
         return len(ids)
 
     except Exception as exc:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.exception(f"Erro ao atualizar produto_id em embeddings: {exc}")
         return 0
