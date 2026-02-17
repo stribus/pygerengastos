@@ -30,10 +30,15 @@ DEFAULT_CATEGORIAS_CSV = _BASE_DIR / "data" / "categorias.csv"
 
 
 def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
-	"""Resolve o caminho do banco de dados."""
+	"""Resolve o caminho do banco de dados e garante que o diretório pai existe."""
 	if db_path is None:
-		return DEFAULT_DB_PATH
-	return Path(db_path)
+		path = DEFAULT_DB_PATH
+	else:
+		path = Path(db_path)
+	
+	# Criar diretório pai se não existir
+	path.parent.mkdir(parents=True, exist_ok=True)
+	return path
 
 _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	"""
