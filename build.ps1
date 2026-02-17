@@ -49,10 +49,7 @@ foreach ($item in $itemsToCopy) {
 		continue
 	}
 	$destination = Join-Path $packagePath $item
-	$destinationDir = Split-Path -Parent $destination
-	if (-not (Test-Path $destinationDir)) {
-		New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
-	}
+	$null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
 	Copy-Item -Path $source -Destination $destination -Recurse -Force
 }
 
