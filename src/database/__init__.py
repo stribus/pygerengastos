@@ -933,8 +933,12 @@ def listar_itens_para_classificacao(
 	if not incluir_confirmados:
 		where_clauses.append("i.categoria_confirmada IS NULL")
 	params: list[object] = []
-	# Somente filtrar por categoria_sugerida se NÃO estamos incluindo confirmados
-	# Quando incluir_confirmados=True, queremos reprocessar TUDO
+	# Só filtramos por categoria_sugerida (itens ainda SEM sugestão) quando
+	# NÃO estamos incluindo confirmados. Ou seja:
+	# - incluir_confirmados=False  -> pega apenas itens sem categoria_confirmada
+	#   e, se apenas_sem_categoria=True, também sem categoria_sugerida.
+	# - incluir_confirmados=True   -> reprocessa TODOS os itens, com ou sem
+	#   categoria_sugerida/categoria_confirmada (nenhum filtro extra aqui).
 	if apenas_sem_categoria and not incluir_confirmados:
 		where_clauses.append("i.categoria_sugerida IS NULL")
 	chave_normalizada = chave_acesso.strip() if chave_acesso else None
