@@ -44,11 +44,48 @@ def classificar_itens_pendentes(
 ) -> list[ClassificacaoResultado]:
 	"""Busca itens sem categoria, envia para o LLM configurado e persiste o resultado.
 
+	"""Busca itens pendentes de classificação, aplica classificação híbrida e persiste o resultado.
+
+	A ordem do pipeline é:
+	1. (Opcional) Limpeza de classificações anteriores da nota (`limpar_confirmadas_antes`)
+	2. Busca semântica via ChromaDB (cache de produtos) – exceto se `forcar_llm=True`
+	3. Fallback para LLM (via `LLMClassifier`) para itens ainda não classificados
+
 	Args:
-		incluir_confirmados: Se True, busca todos os itens da nota, incluindo os já confirmados.
-		limpar_confirmadas_antes: Se True, limpa as classificações existentes antes de reprocessar.
-		forcar_llm: Se True, pula a etapa de busca semântica via Chroma e força
-		           classificação via LLM para todos os itens.
+		limit: Número máximo de itens a processar em uma execução.
+		confirmar: Se True, grava a categoria como confirmada (além de sugerida) ao salvar
+			resultados no banco.
+		db_path: Caminho opcional para o arquivo SQLite a ser usado. Se None, usa o padrão
+			definido em `src.database`.
+		classifier: Instância pré-configurada de `LLMClassifier`. Se não for fornecida,
+			uma nova instância será criada com base em `model`, `temperature` e nas
+			categorias conhecidas do banco.
+		model: Identificador do modelo LLM a ser usado pelo `LLMClassifier` (ex.: Gemini).
+			Usado apenas se `classifier` não for informado.
+		temperature: Temperatura a ser usada nas chamadas ao LLM. Usado apenas se
+			`classifier` não for informado.
+		chave_acesso: Se informado, limita a classificação aos itens de uma única NFC-e
+			(identificada pela chave de acesso). Também é usado para controlar a limpeza
+			de classificações anteriores.
+		model_priority: Lista de IDs de modelos em ordem de preferência, passada para
+			`LLMClassifier.classificar_itens` para controlar o fallback entre modelos.
+		progress_callback: Função opcional chamada em diferentes etapas do processo
+			(recebe uma string de status), útil para atualizar a UI (ex.: Streamlit).
+		incluir_confirmados: Se True, também inclui itens que já possuem categoria
+			confirmada para reclassificação. Se False, processa apenas itens sem
+			categoria (pendentes).
+		limpar_confirmadas_antes: Se True e `chave_acesso` for fornecida, remove as
+			categorias confirmadas da nota antes de reprocessar. Em modo normal (com
+			`forcar_llm=False`), apenas as categorias confirmadas são limpas.
+		forcar_llm: Se True, pula totalmente a etapa de busca semântica via Chroma e
+			força classificação via LLM para todos os itens. Quando combinado com
+			`limpar_confirmadas_antes=True`, ativa o modo "full reset", limpando todas
+			as classificações (confirmadas ou não, incluindo vínculo de produto) antes
+			de reclassificar a nota via LLM.
+
+	Returns:
+		list[ClassificacaoResultado]: Lista com os resultados de classificação
+		(semântica e/ou via LLM) para cada item processado.
 	"""
 
 	# Se solicitado, limpar todas as classificações antes de reprocessar
