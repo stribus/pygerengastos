@@ -34,6 +34,7 @@ $itemsToCopy = @(
 	"requirements.txt",
 	"README.md",
 	"INSTALL.md",
+	"config/modelos_llm.toml",
 	"src",
 	"data",
 	"debug_product_update.py",
@@ -48,6 +49,7 @@ foreach ($item in $itemsToCopy) {
 		continue
 	}
 	$destination = Join-Path $packagePath $item
+	$null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
 	Copy-Item -Path $source -Destination $destination -Recurse -Force
 }
 
