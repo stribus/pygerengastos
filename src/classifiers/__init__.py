@@ -89,29 +89,43 @@ def classificar_itens_pendentes(
 	"""
 
 	# Se solicitado, limpar todas as classificações antes de reprocessar
-	if limpar_confirmadas_antes and chave_acesso:
-		if forcar_llm:
-			# Modo full reset: limpar tudo (categorias + produtos)
-			num_limpos = limpar_classificacoes_completas(chave_acesso, db_path=db_path)
-			if num_limpos > 0:
-				logger.info(
-					"Resetadas TODAS as classificações (%s itens) da nota %s antes de reprocessar com LLM.",
-					num_limpos,
-					chave_acesso,
+	if limpar_confirmadas_antes:
+		if not chave_acesso:
+			# Evitar comportamento silencioso quando a flag é True mas não há chave definida
+			logger.warning(
+				"Solicitado 'limpar_confirmadas_antes=True', mas nenhuma 'chave_acesso' foi informada. "
+				"Nenhuma classificação anterior será limpa."
+			)
+			if progress_callback:
+				progress_callback(
+					"Aviso: solicitado limpar classificações anteriores, mas nenhuma chave da nota foi informada. "
+					"Nenhuma limpeza foi realizada."
 				)
-				if progress_callback:
-					progress_callback(f"Limpas {num_limpos} classificações anteriores (modo full reset).")
 		else:
-			# Modo parcial: limpar apenas confirmadas
-			num_limpos = limpar_categorias_confirmadas(chave_acesso, db_path=db_path)
-			if num_limpos > 0:
-				logger.info(
-					"Resetadas %s categorias confirmadas para a nota %s antes de reprocessar.",
-					num_limpos,
-					chave_acesso,
-				)
-				if progress_callback:
-					progress_callback(f"Limpas {num_limpos} categorias confirmadas.")
+			if forcar_llm:
+				# Modo full reset: limpar tudo (categorias + produtos)
+				num_limpos = limpar_classificacoes_completas(chave_acesso, db_path=db_path)
+				if num_limpos > 0:
+					logger.info(
+						"Resetadas TODAS as classificações (%s itens) da nota %s antes de reprocessar com LLM.",
+						num_limpos,
+						chave_acesso,
+					)
+					if progress_callback:
+						progress_callback(
+							f"Limpas {num_limpos} classificações anteriores (modo full reset)."
+						)
+			else:
+				# Modo parcial: limpar apenas confirmadas
+				num_limpos = limpar_categorias_confirmadas(chave_acesso, db_path=db_path)
+				if num_limpos > 0:
+					logger.info(
+						"Resetadas %s categorias confirmadas para a nota %s antes de reprocessar.",
+						num_limpos,
+						chave_acesso,
+					)
+					if progress_callback:
+						progress_callback(f"Limpas {num_limpos} categorias confirmadas.")
 
 	itens = listar_itens_para_classificacao(
 		limit=limit,
