@@ -45,6 +45,8 @@ def classificar_itens_pendentes(
 	"""Busca itens sem categoria, envia para o LLM configurado e persiste o resultado.
 
 	Args:
+		incluir_confirmados: Se True, busca todos os itens da nota, incluindo os já confirmados.
+		limpar_confirmadas_antes: Se True, limpa as classificações existentes antes de reprocessar.
 		forcar_llm: Se True, pula a etapa de busca semântica via Chroma e força
 		           classificação via LLM para todos os itens.
 	"""
