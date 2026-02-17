@@ -12,6 +12,8 @@ from src.database import (
     listar_itens_padronizados,
     listar_notas,
     listar_revisoes_manuais,
+    limpar_categorias_confirmadas,
+    limpar_classificacoes_completas,
     normalizar_produto_descricao,
     registrar_classificacao_itens,
     registrar_revisoes_manuais,
@@ -291,3 +293,388 @@ def test_listar_itens_padronizados_retorna_dimensoes(tmp_path):
     assert item.categoria is None
     assert item.quantidade == nota.itens[0].quantidade
     assert item.valor_total == nota.itens[0].valor_total
+
+
+def test_limpar_categorias_confirmadas_atualiza_rows_corretos(tmp_path):
+    """Testa se limpar_categorias_confirmadas atualiza o número correto de rows."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Confirmar categorias em alguns itens (não todos)
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "origem": "teste",
+                "modelo": "pytest",
+            },
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 2,
+                "categoria": "higiene",
+                "origem": "teste",
+                "modelo": "pytest",
+            },
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    # Limpar categorias confirmadas
+    rows_atualizadas = limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+
+    # Deve ter atualizado exatamente 2 rows (os que tinham categoria_confirmada)
+    assert rows_atualizadas == 2
+
+
+def test_limpar_categorias_confirmadas_limpa_apenas_campos_corretos(tmp_path):
+    """Testa se limpar_categorias_confirmadas limpa apenas categoria_confirmada e categoria_confirmada_id."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Classificar e confirmar item com todos os campos preenchidos
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "confianca": 0.95,
+                "origem": "gemini-litellm",
+                "modelo": "teste",
+                "confirmar": True,
+                "produto_nome": "Arroz",
+                "produto_marca": "Tio João",
+            }
+        ],
+        db_path=db_path,
+    )
+
+    # Capturar estado antes da limpeza
+    with conexao(db_path) as con:
+        before = con.execute(
+            """
+            SELECT categoria_sugerida, categoria_confirmada, produto_id,
+                   produto_nome, produto_marca, fonte_classificacao, confianca_classificacao
+            FROM itens
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        ).fetchone()
+
+    # Limpar categorias confirmadas
+    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+
+    # Verificar estado após limpeza
+    with conexao(db_path) as con:
+        after = con.execute(
+            """
+            SELECT categoria_sugerida, categoria_confirmada, produto_id,
+                   produto_nome, produto_marca, fonte_classificacao, confianca_classificacao
+            FROM itens
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        ).fetchone()
+
+    # categoria_confirmada deve ser NULL
+    assert after[1] is None
+
+    # Outros campos NÃO devem ser afetados
+    assert after[0] == before[0]  # categoria_sugerida
+    assert after[2] == before[2]  # produto_id
+    assert after[3] == before[3]  # produto_nome
+    assert after[4] == before[4]  # produto_marca
+    assert after[5] == before[5]  # fonte_classificacao
+    assert after[6] == before[6]  # confianca_classificacao
+
+
+def test_limpar_categorias_confirmadas_atualiza_timestamp(tmp_path):
+    """Testa se limpar_categorias_confirmadas atualiza o atualizado_em timestamp."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Confirmar categoria
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "origem": "teste",
+                "modelo": "pytest",
+            }
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    # Capturar timestamp antes da limpeza
+    with conexao(db_path) as con:
+        timestamp_antes = con.execute(
+            "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()[0]
+
+    # Aguardar um momento para garantir que o timestamp mude
+    import time
+    time.sleep(0.1)
+
+    # Limpar categorias confirmadas
+    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+
+    # Verificar timestamp após limpeza
+    with conexao(db_path) as con:
+        timestamp_depois = con.execute(
+            "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()[0]
+
+    # Timestamp deve ter sido atualizado
+    assert timestamp_depois > timestamp_antes
+
+
+def test_limpar_categorias_confirmadas_filtra_por_chave_acesso(tmp_path):
+    """Testa se limpar_categorias_confirmadas filtra corretamente por chave_acesso."""
+    db_path = tmp_path / "test.sqlite3"
+    nota1 = _nota_exemplo()
+    salvar_nota(nota1, db_path=db_path)
+
+    # Criar uma segunda nota com chave diferente
+    CHAVE2 = "43251193015006003562651350005430861685582450"
+    nota2 = _nota_exemplo()
+    nota2.chave_acesso = CHAVE2
+    salvar_nota(nota2, db_path=db_path)
+
+    # Confirmar categorias em ambas as notas
+    registrar_classificacao_itens(
+        [
+            {"chave_acesso": CHAVE, "sequencia": 1, "categoria": "alimentacao", "origem": "teste", "modelo": "pytest"},
+            {"chave_acesso": CHAVE2, "sequencia": 1, "categoria": "higiene", "origem": "teste", "modelo": "pytest"},
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    # Limpar apenas a primeira nota
+    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+
+    # Verificar que apenas a primeira nota foi limpa
+    with conexao(db_path) as con:
+        categoria_nota1 = con.execute(
+            "SELECT categoria_confirmada FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()[0]
+        categoria_nota2 = con.execute(
+            "SELECT categoria_confirmada FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE2],
+        ).fetchone()[0]
+
+    assert categoria_nota1 is None  # Limpa
+    assert categoria_nota2 == "higiene"  # Não afetada
+
+
+def test_limpar_categorias_confirmadas_sem_itens_confirmados(tmp_path):
+    """Testa comportamento quando não há itens com categoria_confirmada."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Não confirmar nenhuma categoria, apenas sugerir
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "origem": "teste",
+                "modelo": "pytest",
+            }
+        ],
+        db_path=db_path,
+        confirmar=False,  # Apenas sugestão
+    )
+
+    # Limpar categorias confirmadas (não há nenhuma)
+    rows_atualizadas = limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+
+    # Nenhuma row deve ser atualizada
+    assert rows_atualizadas == 0
+
+
+def test_limpar_classificacoes_completas_atualiza_rows_corretos(tmp_path):
+    """Testa se limpar_classificacoes_completas atualiza o número correto de rows."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Classificar todos os itens
+    num_itens = len(nota.itens)
+    registros = [
+        {
+            "chave_acesso": CHAVE,
+            "sequencia": i + 1,
+            "categoria": "alimentacao",
+            "origem": "teste",
+            "modelo": "pytest",
+        }
+        for i in range(num_itens)
+    ]
+    registrar_classificacao_itens(registros, db_path=db_path, confirmar=True)
+
+    # Limpar todas as classificações
+    rows_atualizadas = limpar_classificacoes_completas(CHAVE, db_path=db_path)
+
+    # Deve ter atualizado todos os itens da nota
+    assert rows_atualizadas == num_itens
+
+
+def test_limpar_classificacoes_completas_limpa_todos_campos(tmp_path):
+    """Testa se limpar_classificacoes_completas limpa todos os campos de classificação e produto."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Classificar com todos os campos preenchidos
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "confianca": 0.95,
+                "origem": "gemini-litellm",
+                "modelo": "teste",
+                "confirmar": True,
+                "produto_nome": "Arroz",
+                "produto_marca": "Tio João",
+            }
+        ],
+        db_path=db_path,
+    )
+
+    # Limpar todas as classificações
+    limpar_classificacoes_completas(CHAVE, db_path=db_path)
+
+    # Verificar que todos os campos foram limpos
+    with conexao(db_path) as con:
+        row = con.execute(
+            """
+            SELECT categoria_sugerida, categoria_confirmada, produto_id,
+                   produto_nome, produto_marca, fonte_classificacao, confianca_classificacao
+            FROM itens
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        ).fetchone()
+
+    # Todos os campos devem ser NULL
+    assert all(campo is None for campo in row)
+
+
+def test_limpar_classificacoes_completas_atualiza_timestamp(tmp_path):
+    """Testa se limpar_classificacoes_completas atualiza o atualizado_em timestamp."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Classificar item
+    registrar_classificacao_itens(
+        [
+            {
+                "chave_acesso": CHAVE,
+                "sequencia": 1,
+                "categoria": "alimentacao",
+                "origem": "teste",
+                "modelo": "pytest",
+            }
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    # Capturar timestamp antes da limpeza
+    with conexao(db_path) as con:
+        timestamp_antes = con.execute(
+            "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()[0]
+
+    # Aguardar um momento para garantir que o timestamp mude
+    import time
+    time.sleep(0.1)
+
+    # Limpar todas as classificações
+    limpar_classificacoes_completas(CHAVE, db_path=db_path)
+
+    # Verificar timestamp após limpeza
+    with conexao(db_path) as con:
+        timestamp_depois = con.execute(
+            "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()[0]
+
+    # Timestamp deve ter sido atualizado
+    assert timestamp_depois > timestamp_antes
+
+
+def test_limpar_classificacoes_completas_filtra_por_chave_acesso(tmp_path):
+    """Testa se limpar_classificacoes_completas filtra corretamente por chave_acesso."""
+    db_path = tmp_path / "test.sqlite3"
+    nota1 = _nota_exemplo()
+    salvar_nota(nota1, db_path=db_path)
+
+    # Criar uma segunda nota com chave diferente
+    CHAVE2 = "43251193015006003562651350005430861685582450"
+    nota2 = _nota_exemplo()
+    nota2.chave_acesso = CHAVE2
+    salvar_nota(nota2, db_path=db_path)
+
+    # Classificar ambas as notas
+    registrar_classificacao_itens(
+        [
+            {"chave_acesso": CHAVE, "sequencia": 1, "categoria": "alimentacao", "origem": "teste", "modelo": "pytest"},
+            {"chave_acesso": CHAVE2, "sequencia": 1, "categoria": "higiene", "origem": "teste", "modelo": "pytest"},
+        ],
+        db_path=db_path,
+        confirmar=True,
+    )
+
+    # Limpar apenas a primeira nota
+    limpar_classificacoes_completas(CHAVE, db_path=db_path)
+
+    # Verificar que apenas a primeira nota foi limpa
+    with conexao(db_path) as con:
+        categoria_nota1 = con.execute(
+            "SELECT categoria_sugerida, categoria_confirmada FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE],
+        ).fetchone()
+        categoria_nota2 = con.execute(
+            "SELECT categoria_sugerida, categoria_confirmada FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE2],
+        ).fetchone()
+
+    assert all(campo is None for campo in categoria_nota1)  # Limpa
+    assert categoria_nota2[0] == "higiene"  # Não afetada
+    assert categoria_nota2[1] == "higiene"  # Não afetada
+
+
+def test_limpar_classificacoes_completas_sem_classificacoes(tmp_path):
+    """Testa comportamento quando não há classificações para limpar."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = _nota_exemplo()
+    salvar_nota(nota, db_path=db_path)
+
+    # Não classificar nenhum item
+
+    # Limpar classificações (não há nenhuma)
+    rows_atualizadas = limpar_classificacoes_completas(CHAVE, db_path=db_path)
+
+    # Ainda deve atualizar todos os itens (mesmo que já estejam NULL)
+    # porque a query não filtra por campos NOT NULL
+    assert rows_atualizadas == len(nota.itens)
