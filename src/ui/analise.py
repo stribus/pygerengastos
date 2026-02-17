@@ -56,8 +56,8 @@ def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int, total_ite
 
     if col2.button("Processar", type="primary", use_container_width=True):
         modelo_selecionado = MODELOS_IA[modelo_escolhido]
-        # Ler o valor do checkbox do session state
-        reprocessar_todos_value = st.session_state.get(key_checkbox, False)
+        # Usar diretamente o valor atual do checkbox
+        reprocessar_todos_value = reprocessar_todos
 
         # Placeholder para feedback de progresso
         progresso_placeholder = st.empty()
