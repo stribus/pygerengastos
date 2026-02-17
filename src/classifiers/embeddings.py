@@ -72,7 +72,7 @@ def gerar_embedding(texto: str) -> List[float]:
 
 def upsert_produto_embedding(produto_id: int, descricao: str, nome_base: str | None = None, marca_base: str | None = None) -> None:
     """DEPRECATED: Usar upsert_descricao_embedding() ao invés desta função.
-    
+
     Mantida apenas para compatibilidade com código legado.
     """
     upsert_descricao_embedding(
@@ -92,7 +92,7 @@ def upsert_descricao_embedding(
     produto_id: int | None = None
 ) -> None:
     """Indexa uma descrição original com seus dados padronizados.
-    
+
     Args:
         descricao_original: Texto original da nota fiscal (ex: "CR LEITE PIRAC ZERO LAC 200G")
         nome_base: Nome padronizado do produto (ex: "Creme Leite Zero Lactose")
@@ -103,7 +103,7 @@ def upsert_descricao_embedding(
     texto = descricao_original.strip()
     if not texto:
         return
-    
+
     if not nome_base or not nome_base.strip():
         return
 
@@ -135,7 +135,7 @@ def upsert_descricao_embedding(
 
 def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str, Any]]:
     """Busca descrições similares já processadas anteriormente.
-    
+
     Retorna lista com:
         - descricao_original: Texto original indexado
         - nome_base: Nome padronizado do produto
@@ -165,7 +165,7 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
     linha_metadatas = metadatas[0] if metadatas and metadatas[0] else [{} for _ in linha_distancias]
     for distancia, metadata in zip(linha_distancias, linha_metadatas):
         similaridade = max(0.0, 1.0 - distancia)
-        
+
         # Extrai produto_id (pode ser string vazia)
         produto_id_str = metadata.get("produto_id", "")
         produto_id = None
@@ -174,7 +174,7 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
                 produto_id = int(produto_id_str)
             except (ValueError, TypeError):
                 pass
-        
+
         similaridades.append({
             "descricao_original": metadata.get("descricao_original", ""),
             "nome_base": metadata.get("nome_base", ""),
@@ -184,3 +184,56 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
             "score": similaridade,
         })
     return similaridades
+
+def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int) -> int:
+    """Atualiza produto_id em embeddings após consolidação de produtos.
+
+    Busca todos os embeddings com produto_id antigo e atualiza para o novo.
+    Mantém todos os outros metadados intactos.
+
+    Args:
+        produto_id_antigo: ID do produto sendo consolidado
+        produto_id_novo: ID do produto destino (mantido)
+
+    Returns:
+        Número de embeddings atualizados
+    """
+    try:
+        collection = _get_collection()
+
+        # Buscar embeddings com produto_id antigo
+        resultados = collection.get(where={"produto_id": str(produto_id_antigo)})
+
+        if not resultados or not resultados.get("ids"):
+            return 0
+
+        ids = resultados["ids"]
+        metadatas = resultados.get("metadatas") or []
+        documents = resultados.get("documents") or []
+        embeddings = resultados.get("embeddings")  # Pode ser None
+
+        if not ids:
+            return 0
+
+        # Atualizar metadata com novo produto_id
+        for i, metadata in enumerate(metadatas):
+            if metadata is None:
+                metadata = {}
+            metadata["produto_id"] = str(produto_id_novo)
+            metadatas[i] = metadata
+
+        # Re-inserir com novo produto_id (upsert sobrescreve)
+        collection.upsert(
+            ids=ids,
+            metadatas=metadatas,
+            documents=documents,
+            embeddings=embeddings if embeddings else None
+        )
+
+        return len(ids)
+
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Erro ao atualizar produto_id em embeddings: {exc}")
+        return 0
