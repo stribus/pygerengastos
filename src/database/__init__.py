@@ -35,7 +35,7 @@ def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
 		path = DEFAULT_DB_PATH
 	else:
 		path = Path(db_path)
-	
+
 	# Criar diretório pai se não existir
 	path.parent.mkdir(parents=True, exist_ok=True)
 	return path
@@ -539,7 +539,7 @@ def normalizar_produto_descricao(descricao: str | None) -> tuple[str, Optional[s
 	return nome_base.title(), marca
 
 
-def normalizar_nome_produto_universal(nome: str) -> str:
+def normalizar_nome_produto_universal(nome: str | None) -> str:
 	"""Normaliza nomes de produtos movendo tamanhos para o final.
 
 	Regras:
@@ -2454,7 +2454,13 @@ def listar_produtos_similares(
 	try:
 		from rapidfuzz import fuzz
 	except ImportError:
-		logger.error("rapidfuzz não instalado. Execute: uv add rapidfuzz")
+		logger.error(
+			"Dependência opcional 'rapidfuzz' não encontrada. "
+			"Recursos de agrupamento de produtos por similaridade serão desativados. "
+			"Se você está desenvolvendo o projeto, instale-a com: uv add rapidfuzz. "
+			"Se você está usando uma versão empacotada do aplicativo, "
+			"reinstale o aplicativo ou contate o responsável pela distribuição."
+		)
 		return []
 
 	with conexao(db_path) as con:
@@ -2611,33 +2617,20 @@ def consolidar_produtos(
 			).rowcount
 
 			# Migrar aliases
-			alias_rows = con.execute(
-				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
-				[produto_id_origem]
-			).fetchall()
-
-			for (texto_alias,) in alias_rows:
-				try:
-					# Tentar atualizar se já existe (UNIQUE constraint)
-					cursor = con.execute(
-						"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
-						[produto_id_destino, texto_alias]
-					)
-					if cursor.rowcount == 0:
-						# Se não atualizou, é porque não existe, então insere
-						con.execute(
-							"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
-							[produto_id_destino, texto_alias]
-						)
-					aliases_migrados += 1
-				except sqlite3.IntegrityError:
-					# Alias já existe para outro produto, tenta atualizar
-					logger.warning("Alias %s já existe, atualizando produto", texto_alias)
-					con.execute(
-						"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
-						[produto_id_destino, texto_alias]
-					)
-					aliases_migrados += 1
+			try:
+				con.execute(
+					"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+					[produto_id_destino, texto_alias]
+				)
+				aliases_migrados += 1
+			except sqlite3.IntegrityError:
+				# Alias já existe (possivelmente para outro produto), atualiza para apontar para o destino
+				logger.warning("Alias %s já existe, atualizando produto", texto_alias)
+				con.execute(
+					"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
+					[produto_id_destino, texto_alias]
+				)
+				aliases_migrados += 1
 
 			# Deletar aliases antigos (agora todos já foram migrados)
 			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])

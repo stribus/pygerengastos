@@ -36,7 +36,7 @@ def main() -> None:
 				return
 
 		st.sidebar.title("Navegação")
-		paginas = ("Home", "Importar nota", "Analisar notas", "Normalizar Produtos", "Relatórios")
+		paginas = ("Home", "Importar nota", "Analisar notas", "Normalizar produtos", "Relatórios")
 		if "menu_navegacao" not in st.session_state:
 			st.session_state["menu_navegacao"] = paginas[0]
 		proximo_menu = st.session_state.pop("redirecionar_menu", None)

@@ -40,10 +40,11 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 
 	# Produto destino
 	st.markdown("### 🎯 Produto Destino")
-	produto_destino_id = max(produtos, key=lambda x: x["qtd_itens"])["id"]
+	produto_destino = max(produtos, key=lambda x: x["qtd_itens"])
+	produto_destino_id = produto_destino["id"]
 	st.info(
 		f"**ID {produto_destino_id}** será o produto final "
-		f"(possui mais itens vinculados: {max(produtos, key=lambda x: x['qtd_itens'])['qtd_itens']})"
+		f"(possui mais itens vinculados: {produto_destino['qtd_itens']})"
 	)
 
 	st.divider()

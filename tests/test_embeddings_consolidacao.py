@@ -70,6 +70,10 @@ class TestAtualizarProdutoIdEmbeddings:
         assert call_args.kwargs["metadatas"][0]["produto_id"] == "40"
         assert call_args.kwargs["metadatas"][1]["produto_id"] == "40"
 
+        # Verificar que embeddings e documentos foram preservados
+        assert call_args.kwargs["embeddings"] == [[0.1] * 384, [0.2] * 384]
+        assert call_args.kwargs["documents"] == ["AGUA MINERAL 2L", "AGUA C/GAS 2L"]
+
         # Verificar retorno
         assert resultado == 2
 

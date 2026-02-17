@@ -8,6 +8,8 @@ from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
+from src.logger import setup_logging
+
 _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
 _CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
@@ -15,6 +17,9 @@ _CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
 _chroma_client: Optional[Client] = None
 _embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
 _sentence_model: Optional[SentenceTransformer] = None
+
+
+logger = setup_logging('classifiers.embeddings')
 
 
 def _ensure_persist_dir() -> Path:
@@ -198,9 +203,6 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
     Returns:
         Número de embeddings atualizados
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     try:
         collection = _get_collection()
 
