@@ -65,16 +65,16 @@ def classificar_itens_pendentes(
 				if progress_callback:
 					progress_callback(f"Limpas {num_limpos} classificações anteriores (modo full reset).")
 		else:
-			# Modo parcial: limpar apenas confirmadas
+			# Modo parcial: limpar categorias (confirmadas e sugeridas), mas preservar produtos
 			num_limpos = limpar_categorias_confirmadas(chave_acesso, db_path=db_path)
 			if num_limpos > 0:
 				logger.info(
-					"Resetadas %s categorias confirmadas para a nota %s antes de reprocessar.",
+					"Resetadas %s categorias (confirmadas e sugeridas) para a nota %s antes de reprocessar.",
 					num_limpos,
 					chave_acesso,
 				)
 				if progress_callback:
-					progress_callback(f"Limpas {num_limpos} categorias confirmadas.")
+					progress_callback(f"Limpas {num_limpos} categorias (confirmadas e sugeridas).")
 
 	itens = listar_itens_para_classificacao(
 		limit=limit,

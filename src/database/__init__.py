@@ -1172,8 +1172,11 @@ def limpar_categorias_confirmadas(
 	db_path: Path | str | None = None,
 ) -> int:
 	"""
-	Remove categoria_confirmada de todos os itens de uma nota,
-	voltando ao estado pendente.
+	Remove todas as categorias (confirmadas e sugeridas) de todos os itens de uma nota,
+	voltando ao estado pendente para reclassificação.
+
+	Note: Preserva produto_id e embeddings para permitir cache semântico.
+	Para reset completo incluindo produtos, use limpar_classificacoes_completas().
 
 	Returns:
 		Número de itens modificados
@@ -1183,6 +1186,8 @@ def limpar_categorias_confirmadas(
 			"""
 			UPDATE itens
 			SET
+				categoria_sugerida = NULL,
+				categoria_sugerida_id = NULL,
 				categoria_confirmada = NULL,
 				categoria_confirmada_id = NULL,
 				atualizado_em = CURRENT_TIMESTAMP
