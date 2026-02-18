@@ -19,7 +19,7 @@ _embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
 _sentence_model: Optional[SentenceTransformer] = None
 
 
-logger = setup_logging('classifiers.embeddings')
+logger = setup_logging(__name__)
 
 
 def _ensure_persist_dir() -> Path:
