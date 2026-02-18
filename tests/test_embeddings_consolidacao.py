@@ -12,6 +12,17 @@ from src.classifiers.embeddings import (
 )
 
 
+def _sentence_transformer_disponivel() -> bool:
+    """Verifica se o modelo SentenceTransformer pode ser carregado."""
+    try:
+        from sentence_transformers import SentenceTransformer
+        # Tenta carregar o modelo sem download (cache apenas)
+        SentenceTransformer("all-MiniLM-L6-v2", cache_folder=None)
+        return True
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def mock_chroma_client():
     """Mock do cliente ChromaDB para testes isolados."""
@@ -323,6 +334,11 @@ class TestAtualizarProdutoIdEmbeddings:
 class TestIntegracaoEmbeddingsConsolidacao:
     """Testes de integração com ChromaDB real."""
 
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not _sentence_transformer_disponivel(),
+        reason="Modelo SentenceTransformer não disponível (evita download em CI)"
+    )
     def test_atualiza_embedding_real(self, tmp_path: Path):
         """Teste de integração com ChromaDB em diretório temporário."""
         # Configurar ChromaDB em diretório temporário
@@ -370,6 +386,11 @@ class TestIntegracaoEmbeddingsConsolidacao:
             # Cleanup
             emb_module._chroma_client = None
 
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not _sentence_transformer_disponivel(),
+        reason="Modelo SentenceTransformer não disponível (evita download em CI)"
+    )
     def test_consolida_multiplos_embeddings(self, tmp_path: Path):
         """Consolida múltiplos embeddings de uma vez."""
         chroma_dir = tmp_path / "chroma_multi"
