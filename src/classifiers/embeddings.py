@@ -235,6 +235,13 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
                 f"Abortando atualização para produto_id={produto_id_antigo}"
             )
             return 0
+        
+        if len(documents) != len(ids):
+            logger.warning(
+                f"Inconsistência: {len(ids)} IDs mas {len(documents)} documents. "
+                f"Abortando atualização para produto_id={produto_id_antigo}"
+            )
+            return 0
 
         # Atualizar metadata com novo produto_id
         for i in range(len(metadatas)):
@@ -243,12 +250,18 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
             metadatas[i]["produto_id"] = str(produto_id_novo)
 
         # Re-inserir com novo produto_id (upsert sobrescreve)
-        collection.upsert(
-            ids=ids,
-            metadatas=metadatas,
-            documents=documents,
-            embeddings=embeddings if embeddings is not None else None
-        )
+        # Construir argumentos do upsert condicionalmente
+        upsert_args = {
+            "ids": ids,
+            "metadatas": metadatas,
+            "documents": documents,
+        }
+        
+        # Incluir embeddings apenas se disponível (ChromaDB pode não aceitar embeddings=None)
+        if embeddings is not None:
+            upsert_args["embeddings"] = embeddings
+        
+        collection.upsert(**upsert_args)
 
         logger.info(
             f"Embeddings atualizados: {len(ids)} registros migrados de "
