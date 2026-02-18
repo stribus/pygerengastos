@@ -12,6 +12,15 @@ from src.classifiers.llm_classifier import iniciar_carregamento_background
 
 logger = setup_logging("main")
 
+# Dicionário de páginas: mapeia nome da opção -> função de renderização
+PAGINAS = {
+	"Home": render_home,
+	"Importar nota": render_pagina_importacao,
+	"Analisar notas": render_pagina_analise,
+	"Normalizar produtos": render_pagina_normalizacao,
+	"Relatórios": render_pagina_relatorios,
+}
+
 def main() -> None:
 	try:
 		logger.info("Iniciando aplicação Gerenciador de Gastos")
@@ -36,29 +45,27 @@ def main() -> None:
 				return
 
 		st.sidebar.title("Navegação")
-		paginas = ("Home", "Importar nota", "Analisar notas", "Normalizar produtos", "Relatórios")
+		# Usar as chaves do dicionário como opções do menu
+		opcoes_menu = tuple(PAGINAS.keys())
 		if "menu_navegacao" not in st.session_state:
-			st.session_state["menu_navegacao"] = paginas[0]
+			st.session_state["menu_navegacao"] = opcoes_menu[0]
 		proximo_menu = st.session_state.pop("redirecionar_menu", None)
-		if proximo_menu in paginas:
+		if proximo_menu in opcoes_menu:
 			logger.info("Redirecionamento pendente detectado: %s", proximo_menu)
 			st.session_state["menu_navegacao"] = proximo_menu
 		opcao = st.sidebar.radio(
 			"Selecione uma área",
-			paginas,
+			opcoes_menu,
 			key="menu_navegacao",
 		)
 
-		if opcao == "Home":
-			render_home()
-		elif opcao == "Importar nota":
-			render_pagina_importacao()
-		elif opcao == "Analisar notas":
-			render_pagina_analise()
-		elif opcao == "Normalizar produtos":
-			render_pagina_normalizacao()
-		elif opcao == "Relatórios":
-			render_pagina_relatorios()
+		# Renderizar a página selecionada usando o dicionário
+		render_func = PAGINAS.get(opcao)
+		if render_func:
+			render_func()
+		else:
+			logger.error(f"Opção de menu desconhecida: {opcao}")
+			st.error(f"Página '{opcao}' não encontrada.")
 	except Exception as e:
 		logger.exception(f"Erro não tratado na aplicação: {e}")
 		st.error(f"Ocorreu um erro inesperado: {e}")
