@@ -2458,7 +2458,7 @@ def listar_produtos_similares(
 	]
 	"""
 	try:
-		from rapidfuzz import fuzz
+		from rapidfuzz import fuzz, process
 	except ImportError:
 		logger.error(
 			"Dependência opcional 'rapidfuzz' não encontrada. "
@@ -2512,12 +2512,29 @@ def listar_produtos_similares(
 			marcas[marca] = []
 		marcas[marca].append(prod)
 
-	# Dentro de cada marca, buscar similares
+	# Dentro de cada marca, buscar similares usando cdist para otimização
 	for marca, prods in marcas.items():
+		# Se tiver menos de 2 produtos na marca, pular
+		if len(prods) < 2:
+			continue
+
+		# Extrair nomes normalizados para comparação
+		nomes = [p["nome_base"].upper() for p in prods]
+
+		# Calcular matriz de similaridade de uma vez usando cdist (muito mais rápido que O(n²))
+		# scores_matrix[i][j] = similaridade entre prods[i] e prods[j]
+		scores_matrix = process.cdist(
+			nomes,
+			nomes,
+			scorer=fuzz.token_set_ratio,
+			workers=-1  # usa todos os cores disponíveis
+		)
+
 		processados = set()
 
-		for i, prod_a in enumerate(prods):
-			if prod_a["id"] in processados:
+		for i in range(len(prods)):
+			prod_a = prods[i]
+			if i in processados:
 				continue
 
 			cluster = {
@@ -2527,22 +2544,19 @@ def listar_produtos_similares(
 					{**prod_a, "score": 100.0}
 				],
 			}
-			processados.add(prod_a["id"])
+			processados.add(i)
 
-			# Comparar com outros produtos da mesma marca
-			for j, prod_b in enumerate(prods):
-				if i >= j or prod_b["id"] in processados:
+			# Verificar apenas produtos ainda não processados
+			for j in range(i + 1, len(prods)):
+				if j in processados:
 					continue
 
-				# Usar token_set_ratio para ser mais robusto a palavras extras ou ordens diferentes
-				score = fuzz.token_set_ratio(
-					prod_a["nome_base"].upper(),
-					prod_b["nome_base"].upper()
-				)
+				# Usar score pré-calculado da matriz
+				score = scores_matrix[i][j]
 
 				if score >= threshold:
-					cluster["produtos"].append({**prod_b, "score": float(score)})
-					processados.add(prod_b["id"])
+					cluster["produtos"].append({**prods[j], "score": float(score)})
+					processados.add(j)
 
 			# Ordenar produtos do cluster por score descendente
 			cluster["produtos"] = sorted(
