@@ -632,7 +632,13 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		con.execute(ddl)
 
 	# Aplicar migrações (ALTER TABLE)
+	# IMPORTANTE: Manter todas as migrações históricas para compatibilidade com bancos antigos
 	migrations = [
+		"ALTER TABLE itens ADD COLUMN produto_id INTEGER",
+		"ALTER TABLE itens ADD COLUMN produto_nome TEXT",
+		"ALTER TABLE itens ADD COLUMN produto_marca TEXT",
+		"ALTER TABLE notas ADD COLUMN emissao_data DATE",
+		"ALTER TABLE notas ADD COLUMN estabelecimento_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
 	]
