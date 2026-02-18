@@ -160,6 +160,33 @@ class TestAtualizarProdutoIdEmbeddings:
         assert "Inconsistência: 3 IDs mas 1 metadatas" in caplog.text
         assert "Abortando atualização para produto_id=325" in caplog.text
 
+    def test_inconsistencia_documents(self, mock_chroma_client, caplog):
+        """Aborta quando há inconsistência entre IDs e documents."""
+        caplog.set_level("WARNING", logger="src.classifiers.embeddings")
+
+        # Simular ChromaDB retornando dados inconsistentes
+        mock_chroma_client.get.return_value = {
+            "ids": ["hash1", "hash2", "hash3"],  # 3 IDs
+            "metadatas": [{"produto_id": "325"}, {"produto_id": "325"}, {"produto_id": "325"}],
+            "documents": ["AGUA MINERAL 2L"],  # 1 document (ERRO!)
+            "embeddings": [[0.1] * 384],
+        }
+
+        resultado = atualizar_produto_id_embeddings(
+            produto_id_antigo=325,
+            produto_id_novo=40
+        )
+
+        # Não deve chamar upsert (abortado)
+        assert not mock_chroma_client.upsert.called
+
+        # Retorna 0
+        assert resultado == 0
+
+        # Logging de warning
+        assert "Inconsistência: 3 IDs mas 1 documents" in caplog.text
+        assert "Abortando atualização para produto_id=325" in caplog.text
+
     def test_metadata_none(self, mock_chroma_client):
         """Cria dict vazio quando metadata é None."""
         mock_chroma_client.get.return_value = {
@@ -229,6 +256,27 @@ class TestAtualizarProdutoIdEmbeddings:
         # Verificar que embeddings foram passados inalterados
         call_args = mock_chroma_client.upsert.call_args
         assert call_args.kwargs["embeddings"] == [embedding_original]
+
+    def test_embeddings_none_nao_passado(self, mock_chroma_client):
+        """Quando embeddings é None, não passa parâmetro embeddings para upsert."""
+        mock_chroma_client.get.return_value = {
+            "ids": ["hash1"],
+            "metadatas": [{"produto_id": "100"}],
+            "documents": ["CHOCOLATE"],
+            "embeddings": None,  # ChromaDB pode retornar None
+        }
+
+        atualizar_produto_id_embeddings(
+            produto_id_antigo=100,
+            produto_id_novo=200
+        )
+
+        # Verificar que upsert foi chamado SEM o parâmetro embeddings
+        call_args = mock_chroma_client.upsert.call_args
+        assert "ids" in call_args.kwargs
+        assert "metadatas" in call_args.kwargs
+        assert "documents" in call_args.kwargs
+        assert "embeddings" not in call_args.kwargs  # Não deve estar presente
 
     def test_erro_chromadb_exception(self, mock_chroma_client, caplog):
         """Trata exceções do ChromaDB e retorna 0."""
