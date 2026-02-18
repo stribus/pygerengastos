@@ -13,6 +13,11 @@ from src.classifiers.llm_classifier import iniciar_carregamento_background
 logger = setup_logging("main")
 
 # Dicionário de páginas: mapeia nome da opção -> função de renderização
+# Esta estrutura elimina erros de digitação e centraliza a definição das páginas.
+# Para adicionar uma nova página:
+#   1. Adicione uma entrada neste dicionário
+#   2. Importe a função de renderização no topo do arquivo
+# O código de navegação (linhas 49-68) usa automaticamente as chaves deste dicionário.
 PAGINAS = {
 	"Home": render_home,
 	"Importar nota": render_pagina_importacao,
