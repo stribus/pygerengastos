@@ -321,7 +321,7 @@ class TestConsolidacaoProdutos:
 
 		nome_novo = "Água Mineral c/Gás 2L"
 
-		consolidar_produtos(
+		stats = consolidar_produtos(
 			produto_id_origem=prod_origem.id,
 			produto_id_destino=prod_destino.id,
 			nome_final=nome_novo,
@@ -334,6 +334,52 @@ class TestConsolidacaoProdutos:
 				[prod_destino.id],
 			).fetchone()
 			assert produto[0] == nome_novo
+			assert stats["nome_final_usado"] == nome_novo
+
+	def test_nome_final_conflito_unique_constraint(self, tmp_path: Path) -> None:
+		"""Gera nome alternativo quando há conflito de UNIQUE (nome_base, marca_base)."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute(
+				"INSERT INTO categorias (grupo, nome) VALUES (?, ?)",
+				["Bebidas", "Água"],
+			)
+
+			# Criar 3 produtos com mesma marca
+			prod_origem = _criar_produto(con, "Água Mineral", "Marca A", 1)
+			prod_destino = _criar_produto(con, "Água com Gás", "Marca A", 1)
+			prod_conflito = _criar_produto(con, "Água Normalizada", "Marca A", 1)  # Conflita com nome_final
+
+		nome_novo = "Água Normalizada"  # Já existe em prod_conflito
+
+		stats = consolidar_produtos(
+			produto_id_origem=prod_origem.id,
+			produto_id_destino=prod_destino.id,
+			nome_final=nome_novo,
+			db_path=db_path,
+		)
+
+		# Deve ter gerado nome alternativo
+		assert stats["nome_final_usado"] != nome_novo
+		assert stats["nome_final_usado"].startswith(nome_novo)
+		assert "(" in stats["nome_final_usado"]  # Contém sufixo numérico
+
+		with conexao(db_path) as con:
+			# Verificar que produto destino foi renomeado com sufixo
+			produto = con.execute(
+				"SELECT nome_base FROM produtos WHERE id = ?",
+				[prod_destino.id],
+			).fetchone()
+			assert produto[0] == stats["nome_final_usado"]
+			assert produto[0] != nome_novo
+
+			# Produto conflito ainda existe com nome original
+			produto_conflito_atual = con.execute(
+				"SELECT nome_base FROM produtos WHERE id = ?",
+				[prod_conflito.id],
+			).fetchone()
+			assert produto_conflito_atual[0] == "Água Normalizada"
 
 
 class TestIntegracaoCompleta:
@@ -354,11 +400,12 @@ class TestIntegracaoCompleta:
 			prod2 = _criar_produto(con, "Água Mineral com gás", "Água da Pedra", 1)
 			prod3 = _criar_produto(con, "Água c/gás 2L", "Água da Pedra", 1)
 
-			# Criar itens
-			for pid in [prod1.id, prod2.id, prod3.id]:
+		# Criar itens (cada um com sequencia diferente para evitar constraint UNIQUE)
+		with conexao(db_path) as con:
+			for idx, pid in enumerate([prod1.id, prod2.id, prod3.id], start=1):
 				con.execute(
 					"INSERT INTO itens (chave_acesso, sequencia, descricao, produto_id) VALUES (?, ?, ?, ?)",
-					["CHAVE1", 1, "AGUA", pid],
+					["CHAVE1", idx, "AGUA", pid],
 				)
 
 		# Detectar duplicatas

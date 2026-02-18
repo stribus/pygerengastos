@@ -2528,7 +2528,8 @@ def listar_produtos_similares(
 				if i >= j or prod_b["id"] in processados:
 					continue
 
-				score = fuzz.ratio(
+				# Usar token_set_ratio para ser mais robusto a palavras extras ou ordens diferentes
+				score = fuzz.token_set_ratio(
 					prod_a["nome_base"].upper(),
 					prod_b["nome_base"].upper()
 				)
@@ -2560,7 +2561,7 @@ def consolidar_produtos(
 	observacoes: str | None = None,
 	*,
 	db_path: Path | str | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
 	"""Consolida dois produtos mesclando aliases, itens e embeddings.
 
 	Migra:
@@ -2570,10 +2571,11 @@ def consolidar_produtos(
 
 	Registra auditoria em consolidacoes_historico.
 
-	Retorna estatísticas: {"itens_migrados": N, "aliases_migrados": M, "embeddings_atualizados": K}
+	Retorna estatísticas: {"itens_migrados": N, "aliases_migrados": M, "embeddings_atualizados": K, "nome_final_usado": str}
 	"""
 	itens_migrados = 0
 	aliases_migrados = 0
+	nome_final_usado = None  # Nome efetivamente usado (pode ter sufixo numérico)
 
 	with conexao(db_path) as con:
 		con.execute("BEGIN TRANSACTION")
@@ -2590,18 +2592,47 @@ def consolidar_produtos(
 			).fetchone()
 
 			if not origem_row or not destino_row:
-				con.execute("ROLLBACK")
 				raise ValueError(f"Produto origem ({produto_id_origem}) ou destino ({produto_id_destino}) não encontrado")
 
 			nome_origem = origem_row[0]
 			nome_destino = destino_row[0]
+			marca_destino = destino_row[1]  # marca_base
 
 			# Atualizar nome do produto destino se fornecido
 			if nome_final and nome_final.strip():
+				nome_final_strip = nome_final.strip()
+
+				# Verificar se o nome_final já existe em outro produto (conflict com UNIQUE constraint)
+				conflito_row = con.execute(
+					"SELECT id FROM produtos WHERE nome_base = ? AND marca_base = ? AND id != ?",
+					[nome_final_strip, marca_destino, produto_id_destino]
+				).fetchone()
+
+				if conflito_row:
+					# Gerar nome alternativo com sufixo numérico
+					base_nome = nome_final_strip
+					contador = 1
+					while True:
+						novo_nome = f"{base_nome} ({contador})"
+						conflito_row = con.execute(
+							"SELECT id FROM produtos WHERE nome_base = ? AND marca_base = ? AND id != ?",
+							[novo_nome, marca_destino, produto_id_destino]
+						).fetchone()
+						if not conflito_row:
+							nome_final_strip = novo_nome
+							logger.info(
+								"Nome '%s' já existe, usando nome alternativo: '%s'",
+								base_nome,
+								novo_nome
+							)
+							break
+						contador += 1
+
 				con.execute(
 					"UPDATE produtos SET nome_base = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
-					[nome_final.strip(), produto_id_destino]
+					[nome_final_strip, produto_id_destino]
 				)
+				nome_final_usado = nome_final_strip
 
 			# Migrar itens
 			itens_migrados = con.execute(
@@ -2617,20 +2648,27 @@ def consolidar_produtos(
 			).rowcount
 
 			# Migrar aliases
-			try:
-				con.execute(
-					"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
-					[produto_id_destino, texto_alias]
-				)
-				aliases_migrados += 1
-			except sqlite3.IntegrityError:
-				# Alias já existe (possivelmente para outro produto), atualiza para apontar para o destino
-				logger.warning("Alias %s já existe, atualizando produto", texto_alias)
-				con.execute(
-					"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
-					[produto_id_destino, texto_alias]
-				)
-				aliases_migrados += 1
+			aliases_origem = con.execute(
+				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
+				[produto_id_origem]
+			).fetchall()
+
+			for alias_row in aliases_origem:
+				texto_alias = alias_row[0]
+				try:
+					con.execute(
+						"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+						[produto_id_destino, texto_alias]
+					)
+					aliases_migrados += 1
+				except sqlite3.IntegrityError:
+					# Alias já existe (possivelmente para outro produto), atualiza para apontar para o destino
+					logger.warning("Alias %s já existe, atualizando produto", texto_alias)
+					con.execute(
+						"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
+						[produto_id_destino, texto_alias]
+					)
+					aliases_migrados += 1
 
 			# Deletar aliases antigos (agora todos já foram migrados)
 			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
@@ -2671,7 +2709,11 @@ def consolidar_produtos(
 			)
 
 		except Exception as exc:
-			con.execute("ROLLBACK")
+			try:
+				con.execute("ROLLBACK")
+			except sqlite3.OperationalError:
+				# Rollback já foi feito (ex: erro antes de BEGIN ou após COMMIT)
+				pass
 			logger.exception("Erro ao consolidar produtos: %s", exc)
 			raise
 
@@ -2703,5 +2745,6 @@ def consolidar_produtos(
 	return {
 		"itens_migrados": itens_migrados,
 		"aliases_migrados": aliases_migrados,
-		"embeddings_atualizados": embeddings_atualizados
+		"embeddings_atualizados": embeddings_atualizados,
+		"nome_final_usado": nome_final_usado
 	}

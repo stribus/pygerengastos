@@ -87,6 +87,7 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 					"aliases_migrados": 0,
 					"embeddings_atualizados": 0,
 				}
+				nome_usado_final = None  # Nome efetivamente usado após resolução de conflitos
 
 				progress_bar = st.progress(0)
 				status_text = st.empty()
@@ -112,6 +113,17 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 					total_stats["aliases_migrados"] += stats["aliases_migrados"]
 					total_stats["embeddings_atualizados"] += (
 						stats["embeddings_atualizados"]
+					)
+
+					# Capturar nome final usado (da última consolidação)
+					if stats.get("nome_final_usado"):
+						nome_usado_final = stats["nome_final_usado"]
+
+				# Aviso se nome foi alterado por conflito
+				if nome_usado_final and nome_usado_final != nome_final.strip():
+					st.warning(
+						f"ℹ️ O nome foi ajustado para **'{nome_usado_final}'** "
+						f"para evitar conflito com produto existente."
 					)
 
 				# Sucesso

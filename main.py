@@ -55,10 +55,15 @@ def main() -> None:
 			render_pagina_importacao()
 		elif opcao == "Analisar notas":
 			render_pagina_analise()
-		elif opcao == "Normalizar Produtos":
+		elif opcao == "Normalizar produtos":
 			render_pagina_normalizacao()
 		elif opcao == "Relatórios":
 			render_pagina_relatorios()
+	except Exception as e:
+		logger.exception(f"Erro não tratado na aplicação: {e}")
+		st.error(f"Ocorreu um erro inesperado: {e}")
+	finally:
+		logger.info("Aplicação encerrada")
 
 if __name__ == "__main__":
 	main()
