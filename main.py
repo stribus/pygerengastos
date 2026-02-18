@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import streamlit as st
-import traceback
 
 from src.database import inicializar_banco, seed_categorias_csv
 from src.ui import render_pagina_analise, render_pagina_importacao, render_pagina_relatorios
