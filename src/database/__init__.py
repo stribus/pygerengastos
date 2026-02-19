@@ -2596,6 +2596,7 @@ def consolidar_produtos(
 	itens_migrados = 0
 	aliases_migrados = 0
 	nome_final_usado = None  # Nome efetivamente usado (pode ter sufixo numérico)
+	auditoria_id = None  # ID do registro de auditoria
 
 	with conexao(db_path) as con:
 		con.execute("BEGIN TRANSACTION")
@@ -2710,7 +2711,7 @@ def consolidar_produtos(
 			con.execute("DELETE FROM produtos WHERE id = ?", [produto_id_origem])
 
 			# Registrar auditoria (temporariamente com 0 embeddings, atualiza depois)
-			con.execute(
+			cursor = con.execute(
 				"""
 				INSERT INTO consolidacoes_historico
 				(produto_id_origem, produto_id_destino, nome_origem, nome_destino, usuario, observacoes, itens_migrados, aliases_migrados, embeddings_atualizados)
@@ -2728,6 +2729,7 @@ def consolidar_produtos(
 					0  # Será atualizado depois
 				]
 			)
+			auditoria_id = cursor.lastrowid
 
 			# Commit da transação (foreign keys sempre habilitadas)
 			con.execute("COMMIT")
@@ -2755,18 +2757,12 @@ def consolidar_produtos(
 		from src.classifiers.embeddings import atualizar_produto_id_embeddings
 		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
 
-		# Atualizar auditoria com count de embeddings (sem ORDER BY em UPDATE)
-		with conexao(db_path) as con:
-			# Buscar o ID do último registro inserido
-			auditoria_row = con.execute(
-				"SELECT id FROM consolidacoes_historico WHERE produto_id_origem = ? AND produto_id_destino = ? ORDER BY criado_em DESC LIMIT 1",
-				[produto_id_origem, produto_id_destino]
-			).fetchone()
-
-			if auditoria_row:
+		# Atualizar auditoria com count de embeddings
+		if auditoria_id is not None:
+			with conexao(db_path) as con:
 				con.execute(
 					"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
-					[embeddings_atualizados, auditoria_row[0]]
+					[embeddings_atualizados, auditoria_id]
 				)
 
 	except ImportError:
