@@ -435,3 +435,157 @@ class TestIntegracaoCompleta:
 				[id_destino],
 			).fetchone()
 			assert itens_finais[0] == 3  # Todos os itens devem estar lá
+
+	def test_alias_ja_existe_para_destino_nao_conta_como_migrado(self, tmp_path: Path) -> None:
+		"""Quando alias já existe para destino, não deve contar como migrado nem causar erro."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			# Criar categoria
+			con.execute(
+				"INSERT INTO categorias (grupo, nome) VALUES (?, ?)",
+				["Bebidas", "Água"],
+			)
+
+			# Criar produtos
+			prod_origem = _criar_produto(con, "Água Mineral", "Marca A", 1)
+			prod_destino = _criar_produto(con, "Água com Gás", "Marca A", 1)
+
+			# Criar dois aliases para produto origem
+			con.execute(
+				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+				[prod_origem.id, "AGUA DA PEDRA"],
+			)
+			con.execute(
+				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+				[prod_origem.id, "AGUA MINERAL"],
+			)
+			
+			# Manualmente migrar um dos aliases para o destino (simula consolidação parcial anterior)
+			con.execute(
+				"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
+				[prod_destino.id, "AGUA DA PEDRA"],
+			)
+
+		# Agora origem tem apenas "AGUA MINERAL" e destino tem "AGUA DA PEDRA"
+		# Ao consolidar, apenas "AGUA MINERAL" deve ser migrado
+		stats = consolidar_produtos(
+			produto_id_origem=prod_origem.id,
+			produto_id_destino=prod_destino.id,
+			db_path=db_path,
+		)
+
+		# Apenas 1 alias deve ser contado como migrado (AGUA MINERAL)
+		# AGUA DA PEDRA já pertencia ao destino
+		assert stats["aliases_migrados"] == 1
+
+		with conexao(db_path) as con:
+			# Verificar que ambos os aliases agora pertencem ao destino
+			aliases = con.execute(
+				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ? ORDER BY texto_original",
+				[prod_destino.id],
+			).fetchall()
+			alias_texts = [row[0] for row in aliases]
+			assert "AGUA DA PEDRA" in alias_texts
+			assert "AGUA MINERAL" in alias_texts
+			assert len(alias_texts) == 2
+
+	def test_alias_pertence_a_terceiro_produto_nao_migra(self, tmp_path: Path) -> None:
+		"""Quando alias pertence a terceiro produto, não deve migrar nem contar."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			# Criar categoria
+			con.execute(
+				"INSERT INTO categorias (grupo, nome) VALUES (?, ?)",
+				["Bebidas", "Água"],
+			)
+
+			# Criar três produtos
+			prod_origem = _criar_produto(con, "Água Mineral", "Marca A", 1)
+			prod_destino = _criar_produto(con, "Água com Gás", "Marca A", 1)
+			prod_terceiro = _criar_produto(con, "Água Natural", "Marca B", 1)
+
+			# Criar aliases para produto origem
+			con.execute(
+				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+				[prod_origem.id, "AGUA DA PEDRA"],
+			)
+			con.execute(
+				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+				[prod_origem.id, "AGUA MINERAL 2L"],
+			)
+			
+			# Simular cenário problemático: manualmente mover um alias para terceiro produto
+			# (isso poderia acontecer por bug ou manipulação direta do banco)
+			con.execute(
+				"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
+				[prod_terceiro.id, "AGUA DA PEDRA"],
+			)
+
+		# Agora origem tem "AGUA MINERAL 2L" e terceiro produto tem "AGUA DA PEDRA"
+		# Mas nossa query SELECT vai buscar apenas aliases WHERE produto_id = origem
+		# Então vamos pegar apenas "AGUA MINERAL 2L"
+		stats = consolidar_produtos(
+			produto_id_origem=prod_origem.id,
+			produto_id_destino=prod_destino.id,
+			db_path=db_path,
+		)
+
+		# Apenas 1 alias migrado (AGUA MINERAL 2L)
+		assert stats["aliases_migrados"] == 1
+
+		with conexao(db_path) as con:
+			# Verificar que AGUA DA PEDRA ainda pertence ao terceiro produto
+			alias_terceiro = con.execute(
+				"SELECT COUNT(*) FROM aliases_produtos WHERE produto_id = ? AND texto_original = ?",
+				[prod_terceiro.id, "AGUA DA PEDRA"],
+			).fetchone()
+			assert alias_terceiro[0] == 1
+			
+			# Verificar que destino recebeu apenas AGUA MINERAL 2L
+			aliases_destino = con.execute(
+				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
+				[prod_destino.id],
+			).fetchall()
+			assert len(aliases_destino) == 1
+			assert aliases_destino[0][0] == "AGUA MINERAL 2L"
+
+	def test_migra_alias_sem_conflito(self, tmp_path: Path) -> None:
+		"""Migra alias normalmente quando não há conflito."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			# Criar categoria
+			con.execute(
+				"INSERT INTO categorias (grupo, nome) VALUES (?, ?)",
+				["Bebidas", "Água"],
+			)
+
+			# Criar produtos
+			prod_origem = _criar_produto(con, "Água Mineral", "Marca A", 1)
+			prod_destino = _criar_produto(con, "Água com Gás", "Marca A", 1)
+
+			# Criar alias único para produto origem
+			con.execute(
+				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+				[prod_origem.id, "AGUA DA PEDRA"],
+			)
+
+		# Consolidar
+		stats = consolidar_produtos(
+			produto_id_origem=prod_origem.id,
+			produto_id_destino=prod_destino.id,
+			db_path=db_path,
+		)
+
+		# O alias deve ser migrado com sucesso
+		assert stats["aliases_migrados"] == 1
+
+		with conexao(db_path) as con:
+			# Verificar que o alias foi migrado para o destino
+			aliases_destino = con.execute(
+				"SELECT COUNT(*) FROM aliases_produtos WHERE produto_id = ? AND texto_original = ?",
+				[prod_destino.id, "AGUA DA PEDRA"],
+			).fetchone()
+			assert aliases_destino[0] == 1
