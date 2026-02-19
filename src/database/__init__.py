@@ -2729,6 +2729,8 @@ def consolidar_produtos(
 					0  # Será atualizado depois
 				]
 			)
+			
+			# Capturar ID do registro de auditoria inserido
 			auditoria_id = cursor.lastrowid
 
 			# Commit da transação (foreign keys sempre habilitadas)
