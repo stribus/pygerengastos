@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from src.database import (
 	normalizar_nome_produto_universal,
@@ -490,8 +492,8 @@ class TestIntegracaoCompleta:
 			assert "AGUA MINERAL" in alias_texts
 			assert len(alias_texts) == 2
 
-	def test_alias_pertence_a_terceiro_produto_nao_migra(self, tmp_path: Path) -> None:
-		"""Quando alias pertence a terceiro produto, não deve migrar nem contar."""
+	def test_aliases_de_terceiros_nao_sao_afetados(self, tmp_path: Path) -> None:
+		"""Verifica que aliases de terceiros produtos permanecem intactos durante consolidação."""
 		db_path = tmp_path / "test.db"
 
 		with conexao(db_path) as con:
@@ -506,50 +508,43 @@ class TestIntegracaoCompleta:
 			prod_destino = _criar_produto(con, "Água com Gás", "Marca A", 1)
 			prod_terceiro = _criar_produto(con, "Água Natural", "Marca B", 1)
 
-			# Criar aliases para produto origem
+			# Criar alias para produto origem
 			con.execute(
 				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
 				[prod_origem.id, "AGUA DA PEDRA"],
 			)
+			
+			# Criar alias para terceiro produto (não relacionado à consolidação)
 			con.execute(
 				"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
-				[prod_origem.id, "AGUA MINERAL 2L"],
-			)
-			
-			# Simular cenário problemático: manualmente mover um alias para terceiro produto
-			# (isso poderia acontecer por bug ou manipulação direta do banco)
-			con.execute(
-				"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
-				[prod_terceiro.id, "AGUA DA PEDRA"],
+				[prod_terceiro.id, "AGUA MINERAL 2L"],
 			)
 
-		# Agora origem tem "AGUA MINERAL 2L" e terceiro produto tem "AGUA DA PEDRA"
-		# Mas nossa query SELECT vai buscar apenas aliases WHERE produto_id = origem
-		# Então vamos pegar apenas "AGUA MINERAL 2L"
+		# Consolidar origem->destino
 		stats = consolidar_produtos(
 			produto_id_origem=prod_origem.id,
 			produto_id_destino=prod_destino.id,
 			db_path=db_path,
 		)
 
-		# Apenas 1 alias migrado (AGUA MINERAL 2L)
+		# Apenas 1 alias migrado (AGUA DA PEDRA)
 		assert stats["aliases_migrados"] == 1
 
 		with conexao(db_path) as con:
-			# Verificar que AGUA DA PEDRA ainda pertence ao terceiro produto
+			# Verificar que alias do terceiro produto permanece intacto
 			alias_terceiro = con.execute(
 				"SELECT COUNT(*) FROM aliases_produtos WHERE produto_id = ? AND texto_original = ?",
-				[prod_terceiro.id, "AGUA DA PEDRA"],
+				[prod_terceiro.id, "AGUA MINERAL 2L"],
 			).fetchone()
 			assert alias_terceiro[0] == 1
 			
-			# Verificar que destino recebeu apenas AGUA MINERAL 2L
+			# Verificar que destino recebeu apenas o alias da origem
 			aliases_destino = con.execute(
 				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
 				[prod_destino.id],
 			).fetchall()
 			assert len(aliases_destino) == 1
-			assert aliases_destino[0][0] == "AGUA MINERAL 2L"
+			assert aliases_destino[0][0] == "AGUA DA PEDRA"
 
 	def test_migra_alias_sem_conflito(self, tmp_path: Path) -> None:
 		"""Migra alias normalmente quando não há conflito."""
