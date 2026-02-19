@@ -2596,6 +2596,7 @@ def consolidar_produtos(
 	itens_migrados = 0
 	aliases_migrados = 0
 	nome_final_usado = None  # Nome efetivamente usado (pode ter sufixo numérico)
+	auditoria_id = None  # ID do registro de auditoria
 
 	with conexao(db_path) as con:
 		con.execute("BEGIN TRANSACTION")
@@ -2682,13 +2683,25 @@ def consolidar_produtos(
 					)
 					aliases_migrados += 1
 				except sqlite3.IntegrityError:
-					# Alias já existe (possivelmente para outro produto), atualiza para apontar para o destino
-					logger.warning("Alias %s já existe, atualizando produto", texto_alias)
-					con.execute(
-						"UPDATE aliases_produtos SET produto_id = ? WHERE texto_original = ?",
-						[produto_id_destino, texto_alias]
-					)
-					aliases_migrados += 1
+					# Conflito: O alias já existe. Verificar se pertence ao produto de destino ou a um terceiro produto
+					produto_atual_alias = con.execute(
+						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
+						[texto_alias]
+					).fetchone()
+					
+					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
+						# Alias já pertence ao produto de destino - operação nula, não é erro
+						logger.debug(
+							"Alias '%s' já pertence ao produto de destino %d (migração não necessária)",
+							texto_alias, produto_id_destino
+						)
+					else:
+						# Alias pertence a um terceiro produto - não migrar para evitar corrupção de dados
+						logger.warning(
+							"Não foi possível migrar o alias '%s' do produto de origem %d para o destino %d, "
+							"pois o alias já está em uso pelo produto %d.",
+							texto_alias, produto_id_origem, produto_id_destino, produto_atual_alias[0] if produto_atual_alias else None
+						)
 
 			# Deletar aliases antigos (agora todos já foram migrados)
 			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
@@ -2746,12 +2759,13 @@ def consolidar_produtos(
 		from src.classifiers.embeddings import atualizar_produto_id_embeddings
 		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
 
-		# Atualizar auditoria com count de embeddings usando ID capturado
-		with conexao(db_path) as con:
-			con.execute(
-				"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
-				[embeddings_atualizados, auditoria_id]
-			)
+		# Atualizar auditoria com count de embeddings
+		if auditoria_id is not None:
+			with conexao(db_path) as con:
+				con.execute(
+					"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
+					[embeddings_atualizados, auditoria_id]
+				)
 
 	except ImportError:
 		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
