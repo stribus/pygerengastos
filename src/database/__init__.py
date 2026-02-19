@@ -2698,7 +2698,7 @@ def consolidar_produtos(
 			con.execute("DELETE FROM produtos WHERE id = ?", [produto_id_origem])
 
 			# Registrar auditoria (temporariamente com 0 embeddings, atualiza depois)
-			con.execute(
+			cursor = con.execute(
 				"""
 				INSERT INTO consolidacoes_historico
 				(produto_id_origem, produto_id_destino, nome_origem, nome_destino, usuario, observacoes, itens_migrados, aliases_migrados, embeddings_atualizados)
@@ -2716,6 +2716,9 @@ def consolidar_produtos(
 					0  # Será atualizado depois
 				]
 			)
+			
+			# Capturar ID do registro de auditoria inserido
+			auditoria_id = cursor.lastrowid
 
 			# Commit da transação (foreign keys sempre habilitadas)
 			con.execute("COMMIT")
@@ -2743,19 +2746,12 @@ def consolidar_produtos(
 		from src.classifiers.embeddings import atualizar_produto_id_embeddings
 		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
 
-		# Atualizar auditoria com count de embeddings (sem ORDER BY em UPDATE)
+		# Atualizar auditoria com count de embeddings usando ID capturado
 		with conexao(db_path) as con:
-			# Buscar o ID do último registro inserido
-			auditoria_row = con.execute(
-				"SELECT id FROM consolidacoes_historico WHERE produto_id_origem = ? AND produto_id_destino = ? ORDER BY criado_em DESC LIMIT 1",
-				[produto_id_origem, produto_id_destino]
-			).fetchone()
-
-			if auditoria_row:
-				con.execute(
-					"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
-					[embeddings_atualizados, auditoria_row[0]]
-				)
+			con.execute(
+				"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
+				[embeddings_atualizados, auditoria_id]
+			)
 
 	except ImportError:
 		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
