@@ -28,6 +28,18 @@ _BASE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = _BASE_DIR / "data" / "gastos.db"
 DEFAULT_CATEGORIAS_CSV = _BASE_DIR / "data" / "categorias.csv"
 
+
+def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
+	"""Resolve o caminho do banco de dados e garante que o diretório pai existe."""
+	if db_path is None:
+		path = DEFAULT_DB_PATH
+	else:
+		path = Path(db_path)
+
+	# Criar diretório pai se não existir
+	path.parent.mkdir(parents=True, exist_ok=True)
+	return path
+
 _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 	"""
 	CREATE TABLE IF NOT EXISTS categorias (
@@ -120,6 +132,21 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		observacoes TEXT,
 		origem TEXT,
 		confirmado BOOLEAN DEFAULT FALSE,
+		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS consolidacoes_historico (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		produto_id_origem INTEGER NOT NULL,
+		produto_id_destino INTEGER NOT NULL,
+		nome_origem TEXT,
+		nome_destino TEXT,
+		usuario TEXT,
+		observacoes TEXT,
+		itens_migrados INTEGER DEFAULT 0,
+		aliases_migrados INTEGER DEFAULT 0,
+		embeddings_atualizados INTEGER DEFAULT 0,
 		criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)
 	""",
@@ -512,20 +539,100 @@ def normalizar_produto_descricao(descricao: str | None) -> tuple[str, Optional[s
 	return nome_base.title(), marca
 
 
-def _resolver_caminho_banco(db_path: Path | str | None = None) -> Path:
-	caminho = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-	caminho.parent.mkdir(parents=True, exist_ok=True)
-	return caminho
+def normalizar_nome_produto_universal(nome: str | None) -> str:
+	"""Normaliza nomes de produtos movendo tamanhos para o final.
+
+	Regras:
+	1. Extrai tamanhos válidos (número + unidade): "2L", "500ml", "1kg", etc
+	2. Remove unidades órfãs (sem número): "KG" isolado é removido
+	3. Ignora números isolados: "30" em "Tintura 30" é preservado
+	4. Normaliza variações: "C/G" → "c/gás", "ZERO LAC" → "sem lactose"
+	5. Remove pontuação extra e espaços
+	6. Title Case no resultado
+	7. Re-adiciona tamanhos ao final: "Água c/gás 2l"
+
+	Exemplos:
+	- "AGUA DA PEDRA 2L C G" → "Água C/Gás 2l"
+	- "Power Shock Menta Spray 15ml Sexy Fantasy" → "Power Shock Menta Spray Sexy Fantasy 15ml"
+	- "PEPINO SALADA KG" → "Pepino Salada"
+	- "TINT KOLESTON 30 CASTANHO ESCURO" → "Tint Koleston 30 Castanho Escuro"
+	"""
+	if not nome:
+		return ""
+
+	texto = nome.strip()
+	if not texto:
+		return ""
+
+	# 1. Regex para capturar tamanhos válidos (número + unidade)
+	# Aceita: ml, l, g, kg, mg, un, und, unid, cx, pct, pack, lt, sachê, cartela, garrafa, lata, pt, pacote
+	TAMANHOS_REGEX = re.compile(
+		r'\b(\d+[.,]?\d*)\s*(ml|l|g|kg|mg|un|und|unid|cx|pct|pack|lt|sachê?|cartela|garrafa|lata|pt|pacote)\b',
+		re.IGNORECASE
+	)
+
+	# Extrair tamanhos
+	matches_tamanho = TAMANHOS_REGEX.findall(texto)
+
+	# 2. Remover tamanhos do texto
+	texto_sem_tamanho = TAMANHOS_REGEX.sub(' ', texto)
+
+	# 3. Normalizar variações comuns ANTES de remover unidades órfãs
+	# Isso garante que "C/GAS" vire "c/gás" COMPLETO (o G não será removido como unidade órfã)
+	# C/G, CG, C G, C/GAS, CGÁ → c/gás
+	texto_norm = re.sub(r'\bc\s*(?:/\s*)?g(?:as)?\b', 'c/gás', texto_sem_tamanho, flags=re.IGNORECASE)
+
+	# Zero Lactose → Sem Lactose (ZERO LAC, ZEROLAC, ZERO LACTOSE, etc)
+	texto_norm = re.sub(r'\bzero\s+lac(?:t(?:os)?e?)?\b', 'sem lactose', texto_norm, flags=re.IGNORECASE)
+
+	# 4. Remover unidades órfãs (isoladas, sem número) - DEPOIS de normalizar C/GAS
+	UNIDADES_ORFAS = re.compile(
+		r'\b(ml|l|g|kg|mg|un|und|unid|cx|pct|pack|lt|sachê?|cartela|garrafa|lata|pt|pacote)\b',
+		re.IGNORECASE
+	)
+	texto_norm = UNIDADES_ORFAS.sub(' ', texto_norm)
+
+	# 5. Remover pontuação (mantendo espaços)
+	texto_norm = re.sub(r'[^\w\s/áéíóúâêôãõç]', ' ', texto_norm)
+
+	# 6. Normalizar múltiplos espaços
+	texto_norm = re.sub(r'\s+', ' ', texto_norm).strip()
+
+	# 7. Remover stopwords (artigos, preposições) para limpeza
+	#    E.g.: "AGUA DA PEDRA 2L C G" → "AGUA PEDRA 2L C/GAS"
+	#    MAS PRESERVAR "SEM LACTOSE" como termo composto
+	tokens = [
+		token
+		for token in texto_norm.split()
+		if token.upper() not in _STOPWORDS_DESCRICAO or token.lower() == "sem"  # Preservar "sem" de "sem lactose"
+	]
+	texto_norm = " ".join(tokens).strip()
+
+	# 8. Title Case
+	nome_normalizado = texto_norm.title()
+
+	# 9. Re-adicionar tamanhos ao final
+	if matches_tamanho:
+		# Formatar tamanhos: "500ml", "2l", etc
+		tamanhos_str = " ".join([f"{num}{unidade}".lower() for num, unidade in matches_tamanho])
+		nome_final = f"{nome_normalizado} {tamanhos_str}".strip()
+	else:
+		nome_final = nome_normalizado
+
+	return nome_final
 
 
 def _aplicar_schema(con: sqlite3.Connection) -> None:
-	# Habilita foreign keys (desabilitado por padrão no SQLite)
-	con.execute("PRAGMA foreign_keys = ON")
+	"""Cria tabelas e views se não existirem."""
 
+	# Garantir que constraints de chave estrangeira sejam aplicadas nesta conexão
+	con.execute("PRAGMA foreign_keys = ON")
+	# Criar tabelas
 	for ddl in _SCHEMA_DEFINITIONS:
 		con.execute(ddl)
 
-	# SQLite não tem ADD COLUMN IF NOT EXISTS, então tratamos erros
+	# Aplicar migrações (ALTER TABLE)
+	# IMPORTANTE: Manter todas as migrações históricas para compatibilidade com bancos antigos
 	migrations = [
 		"ALTER TABLE itens ADD COLUMN produto_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN produto_nome TEXT",
@@ -543,6 +650,7 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 			# Coluna já existe, ignora
 			pass
 
+	# Criar views
 	for ddl in _VIEW_DEFINITIONS:
 		con.execute(ddl)
 
@@ -2321,3 +2429,360 @@ def obter_quantidades_mensais_produtos(
 		}
 		for row in rows
 	]
+
+def listar_produtos_similares(
+	threshold: int = 85,
+	*,
+	db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+	"""Detecta produtos similares usando fuzzy matching.
+
+	Retorna lista de clusters com produtos similares:
+	[
+		{
+			"cluster_id": 0,
+			"nome_sugerido": "Água C/Gás 2l",
+			"produtos": [
+				{
+					"id": 40,
+					"nome_base": "Água Mineral",
+					"marca_base": "Água da Pedra",
+					"categoria_nome": "Bebidas",
+					"qtd_aliases": 5,
+					"qtd_itens": 12,
+					"score": 90.5
+				},
+				...
+			]
+		}
+	]
+	"""
+	try:
+		from rapidfuzz import fuzz, process
+	except ImportError:
+		logger.error(
+			"Dependência opcional 'rapidfuzz' não encontrada. "
+			"Recursos de agrupamento de produtos por similaridade serão desativados. "
+			"Se você está desenvolvendo o projeto, instale-a com: uv add rapidfuzz. "
+			"Se você está usando uma versão empacotada do aplicativo, "
+			"reinstale o aplicativo ou contate o responsável pela distribuição."
+		)
+		return []
+
+	with conexao(db_path) as con:
+		rows = con.execute(
+			"""
+			SELECT
+				p.id,
+				p.nome_base,
+				p.marca_base,
+				c.nome as categoria_nome,
+				COUNT(DISTINCT a.id) as qtd_aliases,
+				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens,
+				--GROUP_CONCAT(DISTINCT i.descricao) as descricoes_itens,
+				--GROUP_CONCAT(DISTINCT i.produto_nome) as nomes_itens
+				i.descricao as descricoes_itens,
+				i.produto_nome as nomes_itens
+			FROM produtos p
+			LEFT JOIN categorias c ON c.id = p.categoria_id
+			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
+			LEFT JOIN itens i ON i.produto_id = p.id
+			WHERE
+				i.descricao IS NOT NULL
+			GROUP BY p.id
+			ORDER BY p.marca_base, p.nome_base, i.descricao,nomes_itens
+			"""
+		).fetchall()
+
+	produtos_list = [
+		{
+			"id": row[0],
+			"nome_base": row[1],
+			"marca_base": row[2],
+			"categoria_nome": row[3],
+			"qtd_aliases": row[4] or 0,
+			"qtd_itens": row[5] or 0,
+			"descricoes_itens": row[6] ,
+			"nomes_itens": row[7] ,
+		}
+		for row in rows
+	]
+
+	# Agrupar por marca e aplicar fuzzy matching
+	clusters: list[dict[str, Any]] = []
+	cluster_id = 0
+
+	# Agrupar por marca
+	marcas: dict[str, list[dict]] = {}
+	for prod in produtos_list:
+		marca = prod["marca_base"] or "SEM_MARCA"
+		if marca not in marcas:
+			marcas[marca] = []
+		marcas[marca].append(prod)
+
+	# Dentro de cada marca, buscar similares usando cdist para otimização
+	for marca, prods in marcas.items():
+		# Se tiver menos de 2 produtos na marca, pular
+		if len(prods) < 2:
+			continue
+
+		# Extrair nomes normalizados para comparação
+		nomes = [p["nome_base"].upper() for p in prods]
+
+		# Calcular matriz de similaridade de uma vez usando cdist (muito mais rápido que O(n²))
+		# scores_matrix[i][j] = similaridade entre prods[i] e prods[j]
+		scores_matrix = process.cdist(
+			nomes,
+			nomes,
+			scorer=fuzz.token_set_ratio,
+			workers=-1  # usa todos os cores disponíveis
+		)
+
+		processados = set()
+
+		for i in range(len(prods)):
+			prod_a = prods[i]
+			if i in processados:
+				continue
+
+			cluster = {
+				"cluster_id": cluster_id,
+				"nome_sugerido": normalizar_nome_produto_universal(prod_a["nome_base"]),
+				"produtos": [
+					{**prod_a, "score": 100.0}
+				],
+			}
+			processados.add(i)
+
+			# Verificar apenas produtos ainda não processados
+			for j in range(i + 1, len(prods)):
+				if j in processados:
+					continue
+
+				# Usar score pré-calculado da matriz
+				score = scores_matrix[i][j]
+
+				if score >= threshold:
+					cluster["produtos"].append({**prods[j], "score": float(score)})
+					processados.add(j)
+
+			# Ordenar produtos do cluster por score descendente
+			cluster["produtos"] = sorted(
+				cluster["produtos"],
+				key=lambda x: x["score"],
+				reverse=True
+			)
+
+			# Só adicionar cluster se tiver mais de 1 produto
+			if len(cluster["produtos"]) > 1:
+				clusters.append(cluster)
+				cluster_id += 1
+
+	return sorted(clusters, key=lambda c: len(c["produtos"]), reverse=True)
+
+
+def consolidar_produtos(
+	produto_id_origem: int,
+	produto_id_destino: int,
+	nome_final: str | None = None,
+	usuario: str | None = None,
+	observacoes: str | None = None,
+	*,
+	db_path: Path | str | None = None,
+) -> dict[str, Any]:
+	"""Consolida dois produtos mesclando aliases, itens e embeddings.
+
+	Migra:
+	- itens.produto_id de origem → destino
+	- aliases_produtos de origem → destino (ignorando duplicatas)
+	- embeddings do ChromaDB de origem → destino
+
+	Registra auditoria em consolidacoes_historico.
+
+	Retorna estatísticas: {"itens_migrados": N, "aliases_migrados": M, "embeddings_atualizados": K, "nome_final_usado": str}
+	"""
+	itens_migrados = 0
+	aliases_migrados = 0
+	nome_final_usado = None  # Nome efetivamente usado (pode ter sufixo numérico)
+	auditoria_id = None  # ID do registro de auditoria
+
+	with conexao(db_path) as con:
+		con.execute("BEGIN TRANSACTION")
+		try:
+			# Buscar dados do produto origem e destino
+			origem_row = con.execute(
+				"SELECT nome_base, marca_base FROM produtos WHERE id = ?",
+				[produto_id_origem]
+			).fetchone()
+
+			destino_row = con.execute(
+				"SELECT nome_base, marca_base FROM produtos WHERE id = ?",
+				[produto_id_destino]
+			).fetchone()
+
+			if not origem_row or not destino_row:
+				raise ValueError(f"Produto origem ({produto_id_origem}) ou destino ({produto_id_destino}) não encontrado")
+
+			nome_origem = origem_row[0]
+			nome_destino = destino_row[0]
+			marca_destino = destino_row[1]  # marca_base
+
+			# Atualizar nome do produto destino se fornecido
+			if nome_final and nome_final.strip():
+				nome_final_strip = nome_final.strip()
+
+				# Verificar se o nome_final já existe em outro produto (conflict com UNIQUE constraint)
+				conflito_row = con.execute(
+					"SELECT id FROM produtos WHERE nome_base = ? AND marca_base = ? AND id != ?",
+					[nome_final_strip, marca_destino, produto_id_destino]
+				).fetchone()
+
+				if conflito_row:
+					# Gerar nome alternativo com sufixo numérico
+					base_nome = nome_final_strip
+					contador = 1
+					while True:
+						novo_nome = f"{base_nome} ({contador})"
+						conflito_row = con.execute(
+							"SELECT id FROM produtos WHERE nome_base = ? AND marca_base = ? AND id != ?",
+							[novo_nome, marca_destino, produto_id_destino]
+						).fetchone()
+						if not conflito_row:
+							nome_final_strip = novo_nome
+							logger.info(
+								"Nome '%s' já existe, usando nome alternativo: '%s'",
+								base_nome,
+								novo_nome
+							)
+							break
+						contador += 1
+
+				con.execute(
+					"UPDATE produtos SET nome_base = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+					[nome_final_strip, produto_id_destino]
+				)
+				nome_final_usado = nome_final_strip
+
+			# Migrar itens
+			itens_migrados = con.execute(
+				"""
+				UPDATE itens
+				SET
+					produto_id = ?,
+					produto_nome = COALESCE(?, produto_nome),
+					atualizado_em = CURRENT_TIMESTAMP
+				WHERE produto_id = ?
+				""",
+				[produto_id_destino, nome_final or destino_row[0] or None, produto_id_origem]
+			).rowcount
+
+			# Migrar aliases
+			aliases_origem = con.execute(
+				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
+				[produto_id_origem]
+			).fetchall()
+
+			for alias_row in aliases_origem:
+				texto_alias = alias_row[0]
+				try:
+					con.execute(
+						"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+						[produto_id_destino, texto_alias]
+					)
+					aliases_migrados += 1
+				except sqlite3.IntegrityError:
+					# Conflito: O alias já existe. Verificar se pertence ao produto de destino ou a um terceiro produto
+					produto_atual_alias = con.execute(
+						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
+						[texto_alias]
+					).fetchone()
+					
+					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
+						# Alias já pertence ao produto de destino - operação nula, não é erro
+						logger.debug(
+							"Alias '%s' já pertence ao produto de destino %d (migração não necessária)",
+							texto_alias, produto_id_destino
+						)
+					else:
+						# Alias pertence a um terceiro produto - não migrar para evitar corrupção de dados
+						logger.warning(
+							"Não foi possível migrar o alias '%s' do produto de origem %d para o destino %d, "
+							"pois o alias já está em uso pelo produto %d.",
+							texto_alias, produto_id_origem, produto_id_destino, produto_atual_alias[0] if produto_atual_alias else None
+						)
+
+			# Deletar aliases antigos (agora todos já foram migrados)
+			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
+
+			# Deletar produto origem (agora sem referências dangling)
+			# Foreign keys estão habilitadas - se falhar, há um bug
+			con.execute("DELETE FROM produtos WHERE id = ?", [produto_id_origem])
+
+			# Registrar auditoria (temporariamente com 0 embeddings, atualiza depois)
+			cursor = con.execute(
+				"""
+				INSERT INTO consolidacoes_historico
+				(produto_id_origem, produto_id_destino, nome_origem, nome_destino, usuario, observacoes, itens_migrados, aliases_migrados, embeddings_atualizados)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				[
+					produto_id_origem,
+					produto_id_destino,
+					nome_origem,
+					nome_final or nome_destino,
+					usuario or "sistema",
+					observacoes or None,
+					itens_migrados,
+					aliases_migrados,
+					0  # Será atualizado depois
+				]
+			)
+			
+			# Capturar ID do registro de auditoria inserido
+			auditoria_id = cursor.lastrowid
+
+			# Commit da transação (foreign keys sempre habilitadas)
+			con.execute("COMMIT")
+
+			logger.info(
+				"Produto %d consolidado em %d: %d itens, %d aliases",
+				produto_id_origem,
+				produto_id_destino,
+				itens_migrados,
+				aliases_migrados
+			)
+
+		except Exception as exc:
+			try:
+				con.execute("ROLLBACK")
+			except sqlite3.OperationalError:
+				# Rollback já foi feito (ex: erro antes de BEGIN ou após COMMIT)
+				pass
+			logger.exception("Erro ao consolidar produtos: %s", exc)
+			raise
+
+	# Atualizar embeddings após commit (fora da transação)
+	embeddings_atualizados = 0
+	try:
+		from src.classifiers.embeddings import atualizar_produto_id_embeddings
+		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
+
+		# Atualizar auditoria com count de embeddings
+		if auditoria_id is not None:
+			with conexao(db_path) as con:
+				con.execute(
+					"UPDATE consolidacoes_historico SET embeddings_atualizados = ? WHERE id = ?",
+					[embeddings_atualizados, auditoria_id]
+				)
+
+	except ImportError:
+		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
+	except Exception as exc:
+		logger.exception("Erro ao atualizar embeddings: %s", exc)
+
+	return {
+		"itens_migrados": itens_migrados,
+		"aliases_migrados": aliases_migrados,
+		"embeddings_atualizados": embeddings_atualizados,
+		"nome_final_usado": nome_final_usado
+	}

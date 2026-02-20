@@ -122,4 +122,23 @@ uv add streamlit SQLite3 httpx beautifulsoup4 pytest python-dotenv
 - Use SQLite3 para consultas analíticas rápidas
 - Cache classificações de IA para evitar custos desnecessários  
 - Implemente paginação para listas de notas fiscais
+
+## Padrões Streamlit UI
+
+### Parâmetros Depreciados
+
+**NUNCA use `use_container_width`** — foi depreciado pelo Streamlit e será removido após 2025-12-31.
+
+Use o parâmetro `width` com os valores equivalentes:
+
+```python
+# ❌ Evite (depreciado)
+st.button("Ação", use_container_width=True)
+st.dataframe(df, use_container_width=True)
+
+# ✅ Use
+st.button("Ação", width="stretch")   # equivale a use_container_width=True
+st.dataframe(df, width="stretch")
+st.data_editor(df, width="content")  # equivale a use_container_width=False
+```
 - Otimize queries com índices apropriados no SQLite3
