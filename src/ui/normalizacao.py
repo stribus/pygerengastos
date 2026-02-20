@@ -31,6 +31,10 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 		col1, col2, col3 = st.columns([2, 1, 1])
 		with col1:
 			st.write(f"**ID {p['id']}**: {p['nome_base']}")
+			if p.get("descricoes_itens"):
+				st.caption(f"📄 Descrição: {p['descricoes_itens']}")
+			if p.get("nomes_itens"):
+				st.caption(f"🏷️ Nome produto: {p['nomes_itens']}")
 		with col2:
 			st.write(f"{p['qtd_itens']} itens")
 		with col3:
@@ -215,6 +219,8 @@ def render_pagina_normalizacao() -> None:
 			# Preparar DataFrame
 			df = pd.DataFrame(cluster["produtos"])
 			df["selecionar"] = False
+			# Mover coluna de seleção para o início
+			df = df[["selecionar"] + [c for c in df.columns if c != "selecionar"]]
 
 			# Tabela editável
 			df_editado = st.data_editor(

@@ -2478,13 +2478,19 @@ def listar_produtos_similares(
 				p.marca_base,
 				c.nome as categoria_nome,
 				COUNT(DISTINCT a.id) as qtd_aliases,
-				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens
+				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens,
+				--GROUP_CONCAT(DISTINCT i.descricao) as descricoes_itens,
+				--GROUP_CONCAT(DISTINCT i.produto_nome) as nomes_itens
+				i.descricao as descricoes_itens,
+				i.produto_nome as nomes_itens
 			FROM produtos p
 			LEFT JOIN categorias c ON c.id = p.categoria_id
 			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
 			LEFT JOIN itens i ON i.produto_id = p.id
+			WHERE
+				i.descricao IS NOT NULL
 			GROUP BY p.id
-			ORDER BY p.marca_base, p.nome_base
+			ORDER BY p.marca_base, p.nome_base, i.descricao,nomes_itens
 			"""
 		).fetchall()
 
@@ -2496,6 +2502,8 @@ def listar_produtos_similares(
 			"categoria_nome": row[3],
 			"qtd_aliases": row[4] or 0,
 			"qtd_itens": row[5] or 0,
+			"descricoes_itens": row[6] ,
+			"nomes_itens": row[7] ,
 		}
 		for row in rows
 	]
