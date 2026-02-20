@@ -51,10 +51,10 @@ def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int, total_ite
 
     col1, col2 = st.columns(2)
 
-    if col1.button("Cancelar", use_container_width=True):
+    if col1.button("Cancelar", width="stretch"):
         st.rerun()
 
-    if col2.button("Processar", type="primary", use_container_width=True):
+    if col2.button("Processar", type="primary", width="stretch"):
         modelo_selecionado = MODELOS_IA[modelo_escolhido]
         # Usar diretamente o valor atual do checkbox
         reprocessar_todos_value = reprocessar_todos

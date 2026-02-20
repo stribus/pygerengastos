@@ -514,6 +514,24 @@ scores = cdist(produtos, produtos, scorer=fuzz.ratio, workers=-1)
 
 ## Padrões Streamlit UI
 
+### Parâmetros Depreciados
+
+**NUNCA use `use_container_width`** — foi depreciado pelo Streamlit e será removido após 2025-12-31.
+
+Use o parâmetro `width` com os valores equivalentes:
+
+```python
+# ❌ Evite (depreciado)
+st.button("Ação", use_container_width=True)
+st.dataframe(df, use_container_width=True)
+st.data_editor(df, use_container_width=False)
+
+# ✅ Use
+st.button("Ação", width="stretch")    # equivale a use_container_width=True
+st.dataframe(df, width="stretch")
+st.data_editor(df, width="content")   # equivale a use_container_width=False
+```
+
 ### Navegação com Session State
 
 **SEMPRE** use padrão de redirecionamento consistente:
