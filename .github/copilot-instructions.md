@@ -308,6 +308,333 @@ registrar_revisoes_manuais([...], confirmar=True, usuario="João")
   - Fallback automático para Gemini em caso de erro (resiliente)
 - **HTML Cache**: `data/raw_nfce/` facilita re-parsing sem re-scraping
 
+## Padrões de Testes (IMPORTANTE)
+
+### Marcadores de Testes de Integração
+
+Testes que usam recursos externos (ChromaDB, SentenceTransformers, APIs) devem usar marcadores:
+
+```python
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _sentence_transformer_disponivel(),
+    reason="SentenceTransformer não disponível"
+)
+def test_embeddings_completo():
+    # teste que requer modelo de embeddings
+```
+
+**Configuração em pyproject.toml**:
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "integration: testes de integração que requerem recursos externos"
+]
+```
+
+### Fixtures de Banco de Dados
+
+**SEMPRE** use `tmp_path` fixture para testes de banco de dados:
+
+```python
+def test_salvar_nota(tmp_path):
+    db_path = tmp_path / "test.db"
+    with conexao(db_path) as con:
+        # testes...
+```
+
+### Cleanup de Estado Global
+
+Para testes que usam caches module-level, adicione fixture de cleanup:
+
+```python
+@pytest.fixture(autouse=True)
+def limpar_cache():
+    """Limpa cache global antes de cada teste"""
+    from src.classifiers.llm_classifier import _modelos_cache, _modelos_cache_lock
+    
+    with _modelos_cache_lock:
+        _modelos_cache.clear()
+    yield
+```
+
+### Mocks com Monkeypatch
+
+Use `monkeypatch` para substituir funções module-level em testes:
+
+```python
+def test_classificacao_sem_api(monkeypatch):
+    def fake_busca_semantica(*args):
+        return []
+    
+    monkeypatch.setattr(
+        "src.classifiers.embeddings.buscar_produtos_semelhantes",
+        fake_busca_semantica
+    )
+```
+
+### Padrões de Testes de Cleanup
+
+Testes de funções de limpeza devem verificar:
+1. **Rowcount correto** após UPDATE/DELETE
+2. **Apenas campos intencionados foram NULL**
+3. **Campo `atualizado_em` foi atualizado**
+4. **Filtro por `chave_acesso` funciona**
+5. **Comportamento com zero rows afetadas**
+
+**Exemplo**: Ver `tests/test_database.py::test_limpar_categorias_confirmadas_*`
+
+## Tratamento de Exceções (Padrões)
+
+### Exceções Específicas SQLite3
+
+```python
+import sqlite3
+
+try:
+    con.execute("INSERT INTO produtos ...")
+except sqlite3.IntegrityError as e:
+    # Violação de constraint (UNIQUE, FK, etc)
+    logger.warning(f"Produto duplicado: {e}")
+except sqlite3.OperationalError as e:
+    # Erro de schema (tabela não existe, coluna inválida)
+    logger.error(f"Erro de schema: {e}")
+```
+
+### Exceções LiteLLM
+
+```python
+from litellm import RateLimitError, Timeout
+
+try:
+    response = completion(...)
+except RateLimitError:
+    # Rate limit da API - retry com backoff
+    time.sleep(60)
+except Timeout:
+    # Timeout - falha rápida ou retry
+    logger.warning("Timeout na API LLM")
+```
+
+### Timeout em Background Loading
+
+```python
+from concurrent.futures import TimeoutError
+
+try:
+    future.result(timeout=5)
+except TimeoutError:
+    logger.warning("Timeout no carregamento - usando fallback")
+    return _obter_modelos_fallback()
+```
+
+### Fallback Silencioso (TOML)
+
+**NÃO levante exceção** em parsing de configuração - use fallback:
+
+```python
+try:
+    with open("config/modelos_llm.toml", "rb") as f:
+        data = tomllib.load(f)
+except (FileNotFoundError, tomllib.TOMLDecodeError) as e:
+    logger.error(f"Erro ao carregar TOML: {e}")
+    return _obter_modelos_fallback()  # Não propaga exceção
+```
+
+## Otimizações de Performance (CRÍTICO)
+
+### Lazy Loading com Double-Checked Locking
+
+Para recursos caros (modelos LLM, embeddings), use pattern thread-safe:
+
+```python
+_modelos_cache: dict | None = None
+_modelos_cache_lock = threading.Lock()
+
+def obter_modelos_carregados(aguardar: bool = False):
+    global _modelos_cache
+    
+    # Fast path (sem lock)
+    if _modelos_cache is not None:
+        return _modelos_cache
+    
+    # Slow path (com lock)
+    with _modelos_cache_lock:
+        if _modelos_cache is None:  # Double-check
+            _modelos_cache = _carregar_modelos_toml()
+    
+    return _modelos_cache
+```
+
+### Singletons de Embeddings
+
+**NUNCA** recrie ChromaDB client ou SentenceTransformer - use module-level:
+
+```python
+_chroma_client: chromadb.ClientAPI | None = None
+_embedding_function: SentenceTransformerEmbeddingFunction | None = None
+
+def _obter_chroma_client():
+    global _chroma_client
+    if _chroma_client is None:
+        _chroma_client = chromadb.PersistentClient(path="data/chroma")
+    return _chroma_client
+```
+
+### Threshold de Similaridade Semântica
+
+**Score >= 0.82** ativa cache semântico (evita LLM):
+
+```python
+resultados = buscar_produtos_semelhantes(descricao, limit=1)
+if resultados and resultados[0]["score"] >= 0.82:
+    # Reutiliza produto existente (origem: "chroma-cache")
+    produto_id = resultados[0]["produto_id"]
+else:
+    # Fallback para LLM (origem: "gemini-litellm")
+    classificacao = classificar_com_llm(descricao)
+```
+
+### RapidFuzz para Comparações em Massa
+
+Use `rapidfuzz.process.cdist()` ao invés de loops aninhados:
+
+```python
+from rapidfuzz.process import cdist
+
+# ❌ Evite (O(n²) lento)
+for produto in produtos:
+    for outro in produtos:
+        score = fuzz.ratio(produto, outro)
+
+# ✅ Use (vetorizado, paralelizado)
+from rapidfuzz import fuzz
+scores = cdist(produtos, produtos, scorer=fuzz.ratio, workers=-1)
+```
+
+## Padrões Streamlit UI
+
+### Parâmetros Depreciados
+
+**NUNCA use `use_container_width`** — foi depreciado pelo Streamlit e será removido após 2025-12-31.
+
+Use o parâmetro `width` com os valores equivalentes:
+
+```python
+# ❌ Evite (depreciado)
+st.button("Ação", use_container_width=True)
+st.dataframe(df, use_container_width=True)
+st.data_editor(df, use_container_width=False)
+
+# ✅ Use
+st.button("Ação", width="stretch")    # equivale a use_container_width=True
+st.dataframe(df, width="stretch")
+st.data_editor(df, width="content")   # equivale a use_container_width=False
+```
+
+### Navegação com Session State
+
+**SEMPRE** use padrão de redirecionamento consistente:
+
+```python
+# Iniciar redirecionamento
+st.session_state["redirecionar_menu"] = "Analisar notas"
+st.rerun()
+
+# Processar redirecionamento (main.py)
+if "redirecionar_menu" in st.session_state:
+    menu_escolhido = st.session_state.pop("redirecionar_menu")
+    st.rerun()
+```
+
+### Flags de Bootstrap
+
+Evite inicialização duplicada com flags de session state:
+
+```python
+# main.py
+if "banco_inicializado" not in st.session_state:
+    inicializar_banco_dados()
+    st.session_state["banco_inicializado"] = True
+
+if "modelos_llm_carregamento_iniciado" not in st.session_state:
+    iniciar_carregamento_background()
+    st.session_state["modelos_llm_carregamento_iniciado"] = True
+```
+
+### Dispatch de Páginas via Dicionário
+
+**NÃO use if/elif** - use lookup em dicionário:
+
+```python
+# ❌ Evite
+if opcao == "Home":
+    home.render()
+elif opcao == "Importar nota":
+    importacao.render()
+
+# ✅ Use
+PAGINAS = {
+    "Home": home.render,
+    "Importar nota": importacao.render,
+    "Analisar notas": analise.render,
+}
+
+menu_escolhido = st.sidebar.radio("Menu", options=PAGINAS.keys())
+PAGINAS[menu_escolhido]()
+```
+
+## Migrações de Banco de Dados
+
+### PRAGMA Foreign Keys
+
+**SEMPRE** desabilite temporariamente FKs ao atualizar colunas referenciadas:
+
+```python
+with conexao() as con:
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        # Atualizar produto_id em itens
+        con.execute("UPDATE itens SET produto_id = ?", [novo_id])
+        con.execute("COMMIT")
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+```
+
+### Migrações Idempotentes
+
+SQLite3 não suporta `ADD COLUMN IF NOT EXISTS` - use try/except:
+
+```python
+def _aplicar_schema(con: sqlite3.Connection):
+    """Aplica migrações históricas de forma idempotente"""
+    for sql in _SCHEMA_MIGRATIONS:
+        try:
+            con.execute(sql)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise  # Re-lança se não for duplicação esperada
+```
+
+### Gerenciamento de Views
+
+Defina views em tupla separada e use `CREATE OR REPLACE VIEW`:
+
+```python
+_VIEW_DEFINITIONS = (
+    """
+    CREATE VIEW IF NOT EXISTS vw_itens_padronizados AS
+    SELECT i.*, d.ano_mes, e.nome_fantasia, ...
+    FROM itens i
+    JOIN datas_referencia d ON i.emissao_data = d.data_iso
+    JOIN estabelecimentos e ON i.estabelecimento_id = e.id
+    """,
+)
+
+for view_sql in _VIEW_DEFINITIONS:
+    con.execute(view_sql)
+```
+
 ## Debugging/Troubleshooting
 
 - **Logs**: Sempre consulte `logs/app.log` primeiro
