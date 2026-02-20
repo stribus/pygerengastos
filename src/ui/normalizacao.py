@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from src.database import (
+	buscar_produtos,
 	consolidar_produtos,
 	listar_produtos_similares,
 	normalizar_nome_produto_universal,
@@ -154,6 +155,128 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 				st.error(f"❌ Erro ao consolidar: {exc}")
 
 
+def _render_consolidacao_manual() -> None:
+	"""Renderiza seção de consolidação manual de produtos."""
+	with st.expander("🔍 Não encontrou o produto? Agrupar manualmente"):
+		st.markdown(
+			"Pesquise produtos pelo nome ou marca e adicione-os ao agrupamento "
+			"personalizado para consolidação."
+		)
+
+		# Inicializar estado do agrupamento
+		if "agrupamento_manual" not in st.session_state:
+			st.session_state["agrupamento_manual"] = []
+
+		# Área de busca
+		col1, col2 = st.columns([3, 1])
+		with col1:
+			termo = st.text_input(
+				"🔎 Buscar produto",
+				placeholder="Digite o nome ou marca (mínimo 2 caracteres)...",
+				key="input_busca_manual",
+			)
+		with col2:
+			st.write("")
+			if st.button("🗑️ Limpar agrupamento", key="btn_limpar_agrupamento"):
+				st.session_state["agrupamento_manual"] = []
+				st.rerun()
+
+		# Resultados da busca
+		if termo and len(termo) >= 2:
+			resultados = buscar_produtos(termo)
+			ids_no_agrupamento = {p["id"] for p in st.session_state["agrupamento_manual"]}
+			disponiveis = [r for r in resultados if r["id"] not in ids_no_agrupamento]
+
+			if not resultados:
+				st.info(f"Nenhum produto encontrado para '{termo}'.")
+			elif not disponiveis:
+				st.info("Todos os produtos encontrados já estão no agrupamento.")
+			else:
+				st.write(f"**{len(disponiveis)} produto(s) disponível(eis):**")
+				df_busca = pd.DataFrame(disponiveis)
+				df_busca.insert(0, "adicionar", False)
+
+				df_editado = st.data_editor(
+					df_busca,
+					hide_index=True,
+					width="stretch",
+					column_config={
+						"adicionar": st.column_config.CheckboxColumn(
+							"➕ Adicionar",
+							help="Marque para adicionar ao agrupamento",
+						),
+						"id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+						"nome_base": st.column_config.TextColumn("Nome", disabled=True, width="medium"),
+						"marca_base": st.column_config.TextColumn("Marca", disabled=True, width="small"),
+						"categoria_nome": st.column_config.TextColumn("Categoria", disabled=True, width="small"),
+						"qtd_itens": st.column_config.NumberColumn("Itens", disabled=True, width="small"),
+						"qtd_aliases": st.column_config.NumberColumn("Aliases", disabled=True, width="small"),
+					},
+					key="tabela_busca_manual",
+				)
+
+				para_adicionar = df_editado[df_editado["adicionar"]].drop(columns=["adicionar"]).to_dict("records")
+				if para_adicionar:
+					if st.button("➕ Adicionar selecionados ao agrupamento", key="btn_adicionar_agrupamento"):
+						st.session_state["agrupamento_manual"].extend(para_adicionar)
+						st.rerun()
+
+		# Agrupamento atual
+		agrupamento = st.session_state.get("agrupamento_manual", [])
+		if agrupamento:
+			st.divider()
+			st.markdown(f"### 🛒 Agrupamento ({len(agrupamento)} produto(s))")
+
+			df_agrupamento = pd.DataFrame(agrupamento)
+			df_agrupamento.insert(0, "remover", False)
+
+			df_agrupamento_editado = st.data_editor(
+				df_agrupamento,
+				hide_index=True,
+				width="stretch",
+				column_config={
+					"remover": st.column_config.CheckboxColumn("❌ Remover"),
+					"id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+					"nome_base": st.column_config.TextColumn("Nome", disabled=True, width="medium"),
+					"marca_base": st.column_config.TextColumn("Marca", disabled=True, width="small"),
+					"categoria_nome": st.column_config.TextColumn("Categoria", disabled=True, width="small"),
+					"qtd_itens": st.column_config.NumberColumn("Itens", disabled=True, width="small"),
+					"qtd_aliases": st.column_config.NumberColumn("Aliases", disabled=True, width="small"),
+				},
+				key="tabela_agrupamento_manual",
+			)
+
+			ids_remover = df_agrupamento_editado[df_agrupamento_editado["remover"]]["id"].tolist()
+			if ids_remover:
+				if st.button("❌ Remover selecionados", key="btn_remover_agrupamento"):
+					st.session_state["agrupamento_manual"] = [
+						p for p in agrupamento if p["id"] not in ids_remover
+					]
+					st.rerun()
+
+			if len(agrupamento) >= 2:
+				st.warning(
+					f"⚠️ {len(agrupamento)} produtos serão consolidados "
+					f"no produto com mais itens vinculados."
+				)
+				produto_principal = max(agrupamento, key=lambda x: x["qtd_itens"])
+				nome_sugerido = normalizar_nome_produto_universal(produto_principal["nome_base"])
+				if st.button(
+					f"🚀 Consolidar {len(agrupamento)} produtos",
+					key="btn_consolidar_manual",
+					type="primary",
+					width="stretch",
+				):
+					_dialogo_confirmar_consolidacao(
+						{
+							"produtos": agrupamento,
+							"nome_sugerido": nome_sugerido,
+						}
+					)
+			else:
+				st.info("Adicione pelo menos 2 produtos para consolidar.")
+
+
 def render_pagina_normalizacao() -> None:
 	"""Renderiza página de normalização e consolidação de produtos."""
 	st.title("🔧 Normalizar Produtos")
@@ -201,102 +324,107 @@ def render_pagina_normalizacao() -> None:
 			f"✅ Nenhum produto duplicado detectado "
 			f"(threshold: {threshold}%)."
 		)
-		return
 
-	st.success(
-		f"🔹 {len(clusters)} cluster(s) de produtos similares encontrado(s)."
-	)
+	else:
+		st.success(
+			f"🔹 {len(clusters)} cluster(s) de produtos similares encontrado(s)."
+		)
+
+		st.divider()
+
+		# Exibir clusters em expanders
+		for cluster in clusters:
+			num_produtos = len(cluster["produtos"])
+			nome_cluster = cluster["nome_sugerido"]
+			similares_text = f"{num_produtos} variante{'s' if num_produtos > 1 else ''}"
+
+			with st.expander(f"📦 {nome_cluster} ({similares_text})"):
+				# Preparar DataFrame
+				df = pd.DataFrame(cluster["produtos"])
+				df["selecionar"] = False
+				# Mover coluna de seleção para o início
+				df = df[["selecionar"] + [c for c in df.columns if c != "selecionar"]]
+
+				# Tabela editável
+				df_editado = st.data_editor(
+					df,
+					hide_index=True,
+					width="stretch",
+					column_config={
+						"selecionar": st.column_config.CheckboxColumn(
+							"✓ Consolidar",
+							help="Marque os produtos para consolidar"
+						),
+						"id": st.column_config.NumberColumn(
+							"ID",
+							disabled=True,
+							width="small",
+						),
+						"nome_base": st.column_config.TextColumn(
+							"Nome Atual",
+							disabled=True,
+							width="medium",
+						),
+						"marca_base": st.column_config.TextColumn(
+							"Marca",
+							disabled=True,
+							width="small",
+						),
+						"categoria_nome": st.column_config.TextColumn(
+							"Categoria",
+							disabled=True,
+							width="small",
+						),
+						"qtd_aliases": st.column_config.NumberColumn(
+							"Aliases",
+							disabled=True,
+							width="small",
+						),
+						"qtd_itens": st.column_config.NumberColumn(
+							"Itens",
+							disabled=True,
+							width="small",
+						),
+						"score": st.column_config.NumberColumn(
+							"Similaridade",
+							disabled=True,
+							format="%.0f%%",
+							width="small",
+						),
+					},
+					key=f"cluster_{cluster['cluster_id']}",
+				)
+
+				# Processar seleção
+				selecionados = df_editado[df_editado["selecionar"]]
+
+				if len(selecionados) >= 2:
+					st.warning(
+						f"⚠️ {len(selecionados)} produtos serão consolidados "
+						f"no produto com mais itens vinculados."
+					)
+
+					if st.button(
+						f"🔗 Consolidar {len(selecionados)} produtos",
+						key=f"btn_consolidar_{cluster['cluster_id']}",
+						type="primary",
+						width="stretch",
+					):
+						_dialogo_confirmar_consolidacao(
+							{
+								"produtos": selecionados.to_dict("records"),
+								"nome_sugerido": cluster["nome_sugerido"],
+							}
+						)
+				elif len(selecionados) == 1:
+					st.info("Selecione pelo menos 2 produtos para consolidar.")
+				else:
+					st.text("Selecione produtos acima para consolidar.")
 
 	st.divider()
 
-	# Exibir clusters em expanders
-	for cluster in clusters:
-		num_produtos = len(cluster["produtos"])
-		nome_cluster = cluster["nome_sugerido"]
-		similares_text = f"{num_produtos} variante{'s' if num_produtos > 1 else ''}"
-
-		with st.expander(f"📦 {nome_cluster} ({similares_text})"):
-			# Preparar DataFrame
-			df = pd.DataFrame(cluster["produtos"])
-			df["selecionar"] = False
-			# Mover coluna de seleção para o início
-			df = df[["selecionar"] + [c for c in df.columns if c != "selecionar"]]
-
-			# Tabela editável
-			df_editado = st.data_editor(
-				df,
-				hide_index=True,
-				width="stretch",
-				column_config={
-					"selecionar": st.column_config.CheckboxColumn(
-						"✓ Consolidar",
-						help="Marque os produtos para consolidar"
-					),
-					"id": st.column_config.NumberColumn(
-						"ID",
-						disabled=True,
-						width="small",
-					),
-					"nome_base": st.column_config.TextColumn(
-						"Nome Atual",
-						disabled=True,
-						width="medium",
-					),
-					"marca_base": st.column_config.TextColumn(
-						"Marca",
-						disabled=True,
-						width="small",
-					),
-					"categoria_nome": st.column_config.TextColumn(
-						"Categoria",
-						disabled=True,
-						width="small",
-					),
-					"qtd_aliases": st.column_config.NumberColumn(
-						"Aliases",
-						disabled=True,
-						width="small",
-					),
-					"qtd_itens": st.column_config.NumberColumn(
-						"Itens",
-						disabled=True,
-						width="small",
-					),
-					"score": st.column_config.NumberColumn(
-						"Similaridade",
-						disabled=True,
-						format="%.0f%%",
-						width="small",
-					),
-				},
-				key=f"cluster_{cluster['cluster_id']}",
-			)
-
-			# Processar seleção
-			selecionados = df_editado[df_editado["selecionar"]]
-
-			if len(selecionados) >= 2:
-				st.warning(
-					f"⚠️ {len(selecionados)} produtos serão consolidados "
-					f"no produto com mais itens vinculados."
-				)
-
-				if st.button(
-					f"🔗 Consolidar {len(selecionados)} produtos",
-					key=f"btn_consolidar_{cluster['cluster_id']}",
-					type="primary",
-					width="stretch",
-				):
-					_dialogo_confirmar_consolidacao(
-						{
-							"produtos": selecionados.to_dict("records"),
-							"nome_sugerido": cluster["nome_sugerido"],
-						}
-					)
-			elif len(selecionados) == 1:
-				st.info("Selecione pelo menos 2 produtos para consolidar.")
-			else:
-				st.text("Selecione produtos acima para consolidar.")
+	# Consolidação manual
+	_render_consolidacao_manual()
 
 	st.divider()
 
