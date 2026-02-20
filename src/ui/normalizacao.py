@@ -75,11 +75,11 @@ def _dialogo_confirmar_consolidacao(dados: dict[str, Any]) -> None:
 	col1, col2 = st.columns(2)
 
 	with col1:
-		if st.button("❌ Cancelar", use_container_width=True):
+		if st.button("❌ Cancelar", width="stretch"):
 			st.rerun()
 
 	with col2:
-		if st.button("✅ Consolidar", type="primary", use_container_width=True):
+		if st.button("✅ Consolidar", type="primary", width="stretch"):
 			try:
 				# Consolidar cada produto para o destino
 				total_stats = {
@@ -180,7 +180,7 @@ def render_pagina_normalizacao() -> None:
 		)
 
 	with col3:
-		if st.button("🔄 Atualizar análise", use_container_width=True):
+		if st.button("🔄 Atualizar análise", width="stretch"):
 			st.rerun()
 
 	st.divider()
@@ -220,7 +220,7 @@ def render_pagina_normalizacao() -> None:
 			df_editado = st.data_editor(
 				df,
 				hide_index=True,
-				use_container_width=True,
+				width="stretch",
 				column_config={
 					"selecionar": st.column_config.CheckboxColumn(
 						"✓ Consolidar",
@@ -279,7 +279,7 @@ def render_pagina_normalizacao() -> None:
 					f"🔗 Consolidar {len(selecionados)} produtos",
 					key=f"btn_consolidar_{cluster['cluster_id']}",
 					type="primary",
-					use_container_width=True,
+					width="stretch",
 				):
 					_dialogo_confirmar_consolidacao(
 						{
