@@ -2614,7 +2614,12 @@ def buscar_produtos(
 				c.nome as categoria_nome,
 				COUNT(DISTINCT a.id) as qtd_aliases,
 				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens,
-				GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.descricao), '')) as descricoes_itens
+				-- resumo (truncado) das descrições de itens para evitar strings muito grandes
+				SUBSTR(
+					GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.descricao), '')),
+					1,
+					1000
+				) as descricoes_itens
 			FROM produtos p
 			LEFT JOIN categorias c ON c.id = p.categoria_id
 			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
