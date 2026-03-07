@@ -163,36 +163,63 @@ def _render_consolidacao_manual() -> None:
 			"personalizado para consolidação."
 		)
 
-		# Inicializar estado do agrupamento
+		# Inicializar estado do agrupamento e do termo da última busca executada
 		if "agrupamento_manual" not in st.session_state:
 			st.session_state["agrupamento_manual"] = []
+		if "busca_manual_ultimo_termo" not in st.session_state:
+			st.session_state["busca_manual_ultimo_termo"] = ""
+		if "busca_manual_resultados" not in st.session_state:
+			st.session_state["busca_manual_resultados"] = []
 
-		# Área de busca
-		col1, col2 = st.columns([3, 1])
-		with col1:
-			termo = st.text_input(
-				"🔎 Buscar produto",
-				placeholder="Digite o nome ou marca (mínimo 2 caracteres)...",
-				key="input_busca_manual",
-			)
-		with col2:
-			st.write("")
-			if st.button("🗑️ Limpar agrupamento", key="btn_limpar_agrupamento"):
-				st.session_state["agrupamento_manual"] = []
-				st.rerun()
+		# Formulário de busca: só dispara na submissão (botão ou Enter)
+		with st.form(key="form_busca_manual", border=False):
+			col1, col2, col3 = st.columns([3, 1, 1])
+			with col1:
+				termo = st.text_input(
+					"🔎 Buscar produto",
+					placeholder="Digite o nome, marca ou descrição (mínimo 2 caracteres)...",
+					key="input_busca_manual",
+				)
+			with col2:
+				st.write("")
+				buscar_clicado = st.form_submit_button("🔍 Buscar", type="primary")
+			with col3:
+				st.write("")
+				limpar_busca = st.form_submit_button("🗑️ Limpar agrupamento")
 
-		# Resultados da busca
-		if termo and len(termo) >= 2:
-			resultados = buscar_produtos(termo)
+		# Processar formulário
+		if limpar_busca:
+			st.session_state["agrupamento_manual"] = []
+			st.session_state["busca_manual_ultimo_termo"] = ""
+			st.session_state["busca_manual_resultados"] = []
+			st.rerun()
+
+		if buscar_clicado:
+			termo_strip = termo.strip() if termo else ""
+			if len(termo_strip) >= 2:
+				st.session_state["busca_manual_ultimo_termo"] = termo_strip
+				st.session_state["busca_manual_resultados"] = buscar_produtos(termo_strip)
+			else:
+				st.warning("Digite pelo menos 2 caracteres para buscar.")
+				st.session_state["busca_manual_ultimo_termo"] = ""
+				st.session_state["busca_manual_resultados"] = []
+
+		# Resultados da busca (persistidos no session_state)
+		resultados = st.session_state["busca_manual_resultados"]
+		ultimo_termo = st.session_state["busca_manual_ultimo_termo"]
+
+		if ultimo_termo and not resultados:
+			st.info(f"Nenhum produto encontrado para '{ultimo_termo}'.")
+		elif resultados:
 			ids_no_agrupamento = {p["id"] for p in st.session_state["agrupamento_manual"]}
 			disponiveis = [r for r in resultados if r["id"] not in ids_no_agrupamento]
 
-			if not resultados:
-				st.info(f"Nenhum produto encontrado para '{termo}'.")
-			elif not disponiveis:
+			if not disponiveis:
 				st.info("Todos os produtos encontrados já estão no agrupamento.")
 			else:
-				st.write(f"**{len(disponiveis)} produto(s) disponível(eis):**")
+				total = len(resultados)
+				aviso_limite = " (primeiros 50)" if total == 50 else ""
+				st.write(f"**{len(disponiveis)} produto(s) disponível(eis){aviso_limite}:**")
 				df_busca = pd.DataFrame(disponiveis)
 				if "descricoes_itens" not in df_busca.columns:
 					df_busca["descricoes_itens"] = ""

@@ -2583,12 +2583,14 @@ def listar_produtos_similares(
 
 def buscar_produtos(
 	termo: str,
+	limite: int = 50,
 	*,
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
 	"""Busca produtos por nome, marca ou descrição de item para consolidação manual.
 
 	Retorna lista de produtos cujo nome_base, marca_base ou descrição de item contém o termo.
+	Limita os resultados ao número definido em ``limite`` (padrão: 50).
 	"""
 	termo_strip = termo.strip()
 	with conexao(db_path) as con:
@@ -2614,8 +2616,9 @@ def buscar_produtos(
        			OR i.descricao LIKE ?
 			GROUP BY p.id
 			ORDER BY p.nome_base
+			LIMIT ?
 			""",
-			[f"%{termo_strip}%", f"%{termo_strip}%", f"%{termo_strip}%"]
+			[f"%{termo_strip}%", f"%{termo_strip}%", f"%{termo_strip}%", limite]
 		).fetchall()
 
 	return [

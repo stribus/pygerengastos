@@ -656,3 +656,20 @@ class TestBuscarProdutos:
 		campos = resultados[0].keys()
 		for campo in ("id", "nome_base", "marca_base", "categoria_nome", "qtd_aliases", "qtd_itens"):
 			assert campo in campos
+
+	def test_limite_resultados(self, tmp_path: Path) -> None:
+		"""Limita resultados pelo parâmetro limite."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Suco"])
+			for i in range(10):
+				_criar_produto(con, f"Suco Produto {i}", "Marca A", 1)
+
+		# Sem limite explícito: todos retornados (padrão 50)
+		resultados_todos = buscar_produtos("Suco", db_path=db_path)
+		assert len(resultados_todos) == 10
+
+		# Com limite 3: apenas 3 retornados
+		resultados_limite = buscar_produtos("Suco", limite=3, db_path=db_path)
+		assert len(resultados_limite) == 3
