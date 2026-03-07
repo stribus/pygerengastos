@@ -2586,10 +2586,11 @@ def buscar_produtos(
 	*,
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
-	"""Busca produtos por nome ou marca para consolidação manual.
+	"""Busca produtos por nome, marca ou descrição de item para consolidação manual.
 
-	Retorna lista de produtos cujo nome_base ou marca_base contém o termo.
+	Retorna lista de produtos cujo nome_base, marca_base ou descrição de item contém o termo.
 	"""
+	termo_strip = termo.strip()
 	with conexao(db_path) as con:
 		rows = con.execute(
 			"""
@@ -2606,13 +2607,15 @@ def buscar_produtos(
 			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
 			LEFT JOIN itens i ON i.produto_id = p.id
 			WHERE
+				-- LIKE é case-insensitive para ASCII por padrão no SQLite;
+				-- para acentuados (ex.: Á/á), a comparação é case-sensitive.
 				p.nome_base LIKE ?
     			OR p.marca_base LIKE ?
        			OR i.descricao LIKE ?
 			GROUP BY p.id
 			ORDER BY p.nome_base
 			""",
-			[f"%{termo}%", f"%{termo}%", f"%{termo}%"]
+			[f"%{termo_strip}%", f"%{termo_strip}%", f"%{termo_strip}%"]
 		).fetchall()
 
 	return [
