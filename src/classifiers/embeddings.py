@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import chromadb
+from chromadb.api import ClientAPI
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
@@ -13,7 +14,7 @@ _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
 _CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
 
-_chroma_client: Any | None = None
+_chroma_client: ClientAPI | None = None
 _embedding_function: embedding_functions.EmbeddingFunction | None = None
 _sentence_model: SentenceTransformer | None = None
 
@@ -26,7 +27,7 @@ def _ensure_persist_dir() -> Path:
     return _CHROMA_PERSIST_DIR
 
 
-def _get_client():
+def _get_client() -> ClientAPI:
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client

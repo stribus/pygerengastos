@@ -62,6 +62,9 @@ Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação
     uv pip sync requirements.txt
 ```
 
+  Esse comando remove pacotes que não estão mais listados no arquivo compilado, ajudando a manter o ambiente limpo e reproduzível.
+  Em ambientes de desenvolvimento, use-o com atenção porque pacotes instalados manualmente fora do `requirements.txt` também serão removidos.
+
 - Se `uv` não estiver disponível, o fallback continua sendo:
 
 ```pwsh

@@ -32,6 +32,17 @@ def mock_chroma_client():
         yield mock_collection
 
 
+@pytest.fixture(autouse=True)
+def limpar_cache_chroma():
+    """Evita contaminação de estado global entre testes de embeddings."""
+    import src.classifiers.embeddings as emb_module
+
+    cache_original = emb_module._chroma_client
+    emb_module._chroma_client = None
+    yield
+    emb_module._chroma_client = cache_original
+
+
 def test_get_client_usa_persistent_client(monkeypatch, tmp_path):
     """Inicializa o ChromaDB com PersistentClient para compatibilidade com 1.5+."""
     import src.classifiers.embeddings as emb_module
@@ -44,18 +55,34 @@ def test_get_client_usa_persistent_client(monkeypatch, tmp_path):
         chamadas.append(path)
         return cliente_falso
 
-    emb_module._chroma_client = None
     monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
     monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
 
-    try:
-        cliente = emb_module._get_client()
-    finally:
-        emb_module._chroma_client = None
+    cliente = emb_module._get_client()
 
     assert cliente is cliente_falso
     assert chamadas == [str(caminho_esperado)]
     assert caminho_esperado.exists()
+
+
+def test_get_collection_usa_get_or_create_collection(monkeypatch):
+    """Obtém a coleção via get_or_create_collection na API nova do Chroma."""
+    import src.classifiers.embeddings as emb_module
+
+    colecao_falsa = object()
+    cliente_falso = MagicMock()
+    cliente_falso.get_or_create_collection.return_value = colecao_falsa
+
+    monkeypatch.setattr(emb_module, "_get_client", lambda: cliente_falso)
+    monkeypatch.setattr(emb_module, "_get_embedding_function", lambda: "embedding-fn")
+
+    colecao = emb_module._get_collection()
+
+    assert colecao is colecao_falsa
+    cliente_falso.get_or_create_collection.assert_called_once_with(
+        name="produtos",
+        embedding_function="embedding-fn",
+    )
 
 
 class TestAtualizarProdutoIdEmbeddings:
