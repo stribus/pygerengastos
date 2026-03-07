@@ -13,7 +13,7 @@ Este é um sistema de gerenciamento de despesas mensais em Python que implementa
 - **Frontend**: Streamlit com `st.session_state` para navegação e cache
 - **Backend**: Python 3.13.1
 - **IA/ML**: 
-- Busca semântica: ChromaDB 1.5+ + SentenceTransformers 5.2+ (modelo `all-MiniLM-L6-v2`)
+  - Busca semântica: ChromaDB 1.5+ + SentenceTransformers 5.2+ (modelo `all-MiniLM-L6-v2`)
   - LLM: LiteLLM com modelos configuráveis via TOML (padrão: `gemini/gemini-2.5-flash-lite`)
   - Configuração: `config/modelos_llm.toml` com carregamento lazy + background thread
 - **Banco de Dados**: SQLite3 (nativo Python) com schema normalizado e views agregadas
