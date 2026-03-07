@@ -673,3 +673,32 @@ class TestBuscarProdutos:
 		# Com limite 3: apenas 3 retornados
 		resultados_limite = buscar_produtos("Suco", limite=3, db_path=db_path)
 		assert len(resultados_limite) == 3
+
+	def test_busca_por_descricao_item(self, tmp_path: Path) -> None:
+		"""Encontra produto pela descrição de um item vinculado (join com itens)."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Alimentos", "Biscoito"])
+			produto = _criar_produto(con, "Biscoito Recheado", "Marca X", 1)
+			# Insere item com descricao diferente do nome_base/marca_base do produto
+			con.execute(
+				"""
+				INSERT INTO itens (
+					chave_acesso, sequencia, descricao, produto_id,
+					quantidade, unidade, valor_unitario, valor_total
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				["1234567890123456789012345678901234567890123", 1, "BISC RECH CHOCOLATE 200G", produto.id,
+				 "1.0000", "UN", "3.5000", "3.5000"],
+			)
+
+		# Busca pelo termo presente apenas na descricao do item
+		resultados = buscar_produtos("BISC RECH", db_path=db_path)
+
+		assert len(resultados) == 1
+		assert resultados[0]["nome_base"] == "Biscoito Recheado"
+		assert resultados[0]["qtd_itens"] == 1
+
+		# Verifica que a busca também funciona em lowercase (case-insensitive para ASCII)
+		assert len(buscar_produtos("bisc rech", db_path=db_path)) == 1
