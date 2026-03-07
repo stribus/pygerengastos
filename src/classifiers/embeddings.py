@@ -41,9 +41,18 @@ def _configurar_variaveis_cache_embeddings() -> Path:
             f"Não foi possível criar/acessar diretório de cache de embeddings em '{cache_dir}'. "
             "Verifique permissões de escrita."
         ) from exc
-    os.environ.setdefault("HF_HOME", str(cache_dir))
-    os.environ.setdefault("TRANSFORMERS_CACHE", str(cache_dir))
-    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(cache_dir))
+    # Centraliza explicitamente o cache dos modelos HF no diretório de cache persistente
+    for var in ("HF_HOME", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"):
+        valor_atual = os.environ.get(var)
+        if valor_atual and Path(valor_atual) != cache_dir:
+            logger.warning(
+                "Variável de ambiente %s já estava definida para '%s' e será "
+                "sobrescrita para usar o cache persistente em '%s'.",
+                var,
+                valor_atual,
+                cache_dir,
+            )
+        os.environ[var] = str(cache_dir)
     return cache_dir
 
 
