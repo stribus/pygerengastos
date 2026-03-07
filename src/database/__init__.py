@@ -2606,11 +2606,13 @@ def buscar_produtos(
 			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
 			LEFT JOIN itens i ON i.produto_id = p.id
 			WHERE
-				p.nome_base LIKE ? OR p.marca_base LIKE ?
+				p.nome_base LIKE ?
+    			OR p.marca_base LIKE ?
+       			OR i.descricao LIKE ?
 			GROUP BY p.id
 			ORDER BY p.nome_base
 			""",
-			[f"%{termo}%", f"%{termo}%"]
+			[f"%{termo}%", f"%{termo}%", f"%{termo}%"]
 		).fetchall()
 
 	return [
