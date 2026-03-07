@@ -11,6 +11,7 @@ from unittest.mock import patch
 from src.database import (
 	normalizar_nome_produto_universal,
 	listar_produtos_similares,
+	buscar_produtos,
 	consolidar_produtos,
 	conexao,
 	_criar_produto,
@@ -584,3 +585,120 @@ class TestIntegracaoCompleta:
 				[prod_destino.id, "AGUA DA PEDRA"],
 			).fetchone()
 			assert aliases_destino[0] == 1
+
+
+class TestBuscarProdutos:
+	"""Testes da função buscar_produtos."""
+
+	def test_busca_por_nome(self, tmp_path: Path) -> None:
+		"""Encontra produtos pelo nome."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Água"])
+			_criar_produto(con, "Água Mineral", "Marca A", 1)
+			_criar_produto(con, "Suco de Laranja", "Marca B", 1)
+
+		resultados = buscar_produtos("Água", db_path=db_path)
+
+		assert len(resultados) == 1
+		assert resultados[0]["nome_base"] == "Água Mineral"
+
+	def test_busca_por_marca(self, tmp_path: Path) -> None:
+		"""Encontra produtos pela marca."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Água"])
+			_criar_produto(con, "Água Mineral", "Pedra Azul", 1)
+			_criar_produto(con, "Suco de Laranja", "Outra Marca", 1)
+
+		resultados = buscar_produtos("Pedra", db_path=db_path)
+
+		assert len(resultados) == 1
+		assert resultados[0]["marca_base"] == "Pedra Azul"
+
+	def test_busca_case_insensitive(self, tmp_path: Path) -> None:
+		"""Busca ignora maiúsculas/minúsculas para caracteres ASCII."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Suco"])
+			_criar_produto(con, "Suco de Laranja", "Marca A", 1)
+
+		assert len(buscar_produtos("suco", db_path=db_path)) == 1
+		assert len(buscar_produtos("SUCO", db_path=db_path)) == 1
+		assert len(buscar_produtos("Suco de Laranja", db_path=db_path)) == 1
+		assert len(buscar_produtos("sUcO dE lArAnJa", db_path=db_path)) == 1
+
+	def test_busca_sem_resultados(self, tmp_path: Path) -> None:
+		"""Retorna lista vazia quando não há resultados."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Água"])
+			_criar_produto(con, "Água Mineral", "Marca A", 1)
+
+		resultados = buscar_produtos("Inexistente", db_path=db_path)
+		assert resultados == []
+
+	def test_retorna_campos_corretos(self, tmp_path: Path) -> None:
+		"""Verifica que os campos esperados estão presentes."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Água"])
+			_criar_produto(con, "Água Mineral", "Marca A", 1)
+
+		resultados = buscar_produtos("Água", db_path=db_path)
+
+		assert len(resultados) == 1
+		campos = resultados[0].keys()
+		for campo in ("id", "nome_base", "marca_base", "categoria_nome", "qtd_aliases", "qtd_itens"):
+			assert campo in campos
+
+	def test_limite_resultados(self, tmp_path: Path) -> None:
+		"""Limita resultados pelo parâmetro limite."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Bebidas", "Suco"])
+			for i in range(10):
+				_criar_produto(con, f"Suco Produto {i}", "Marca A", 1)
+
+		# Sem limite explícito: todos retornados (padrão 50)
+		resultados_todos = buscar_produtos("Suco", db_path=db_path)
+		assert len(resultados_todos) == 10
+
+		# Com limite 3: apenas 3 retornados
+		resultados_limite = buscar_produtos("Suco", limite=3, db_path=db_path)
+		assert len(resultados_limite) == 3
+
+	def test_busca_por_descricao_item(self, tmp_path: Path) -> None:
+		"""Encontra produto pela descrição de um item vinculado (join com itens)."""
+		db_path = tmp_path / "test.db"
+
+		with conexao(db_path) as con:
+			con.execute("INSERT INTO categorias (grupo, nome) VALUES (?, ?)", ["Alimentos", "Biscoito"])
+			produto = _criar_produto(con, "Biscoito Recheado", "Marca X", 1)
+			# Insere item com descricao diferente do nome_base/marca_base do produto
+			con.execute(
+				"""
+				INSERT INTO itens (
+					chave_acesso, sequencia, descricao, produto_id,
+					quantidade, unidade, valor_unitario, valor_total
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				["1234567890123456789012345678901234567890123", 1, "BISC RECH CHOCOLATE 200G", produto.id,
+				 "1.0000", "UN", "3.5000", "3.5000"],
+			)
+
+		# Busca pelo termo presente apenas na descricao do item
+		resultados = buscar_produtos("BISC RECH", db_path=db_path)
+
+		assert len(resultados) == 1
+		assert resultados[0]["nome_base"] == "Biscoito Recheado"
+		assert resultados[0]["qtd_itens"] == 1
+
+		# Verifica que a busca também funciona em lowercase (case-insensitive para ASCII)
+		assert len(buscar_produtos("bisc rech", db_path=db_path)) == 1
