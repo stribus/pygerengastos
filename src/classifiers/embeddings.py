@@ -118,11 +118,19 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
             )
             return _sentence_model
         except Exception as exc:
-            raise RuntimeError(
-                "Falha ao inicializar o modelo de embeddings. "
-                "Verifique sua conexão com a internet na primeira execução e permissões de escrita em "
-                f"'{cache_dir}'."
-            ) from exc
+            if isinstance(exc, OSError):
+                mensagem = (
+                    "Falha ao inicializar o modelo de embeddings. "
+                    "Verifique as permissões de escrita e acesso ao diretório de cache em "
+                    f"'{cache_dir}'."
+                )
+            else:
+                mensagem = (
+                    "Falha ao inicializar o modelo de embeddings. "
+                    "Verifique sua conexão com a internet na primeira execução para permitir o "
+                    "download do modelo de embeddings."
+                )
+            raise RuntimeError(mensagem) from exc
 
 
 def _ensure_persist_dir() -> Path:
