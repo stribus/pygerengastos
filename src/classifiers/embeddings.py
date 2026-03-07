@@ -27,6 +27,18 @@ _sentence_model_lock = threading.Lock()
 logger = setup_logging(__name__)
 
 
+class ErroInicializacaoEmbeddings(RuntimeError):
+    """Erro base para inicialização de embeddings."""
+
+
+class ErroCacheEmbeddings(ErroInicializacaoEmbeddings):
+    """Erro ao criar/acessar o cache local de embeddings."""
+
+
+class ErroDownloadEmbeddings(ErroInicializacaoEmbeddings):
+    """Erro ao baixar/carregar o modelo de embeddings."""
+
+
 def obter_diretorio_cache_embeddings() -> Path:
     """Retorna o diretório persistente usado para cache dos modelos HF."""
     return _EMBEDDINGS_CACHE_DIR
@@ -37,7 +49,7 @@ def _configurar_variaveis_cache_embeddings() -> Path:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise RuntimeError(
+        raise ErroCacheEmbeddings(
             f"Não foi possível criar/acessar diretório de cache de embeddings em '{cache_dir}'. "
             "Verifique permissões de escrita."
         ) from exc
@@ -112,25 +124,27 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir=cache_dir,
                 local_files_only=False,
             )
+            _definir_modo_offline(True)
             logger.info(
                 "Modelo de embeddings inicializado e armazenado em cache (%s).",
                 cache_dir,
             )
             return _sentence_model
         except Exception as exc:
-            if isinstance(exc, OSError):
+            if isinstance(exc, PermissionError):
                 mensagem = (
                     "Falha ao inicializar o modelo de embeddings. "
                     "Verifique as permissões de escrita e acesso ao diretório de cache em "
                     f"'{cache_dir}'."
                 )
-            else:
-                mensagem = (
-                    "Falha ao inicializar o modelo de embeddings. "
-                    "Verifique sua conexão com a internet na primeira execução para permitir o "
-                    "download do modelo de embeddings."
-                )
-            raise RuntimeError(mensagem) from exc
+                raise ErroCacheEmbeddings(mensagem) from exc
+
+            mensagem = (
+                "Falha ao inicializar o modelo de embeddings. "
+                "Verifique sua conexão com a internet na primeira execução para permitir o "
+                "download do modelo de embeddings."
+            )
+            raise ErroDownloadEmbeddings(mensagem) from exc
 
 
 def _ensure_persist_dir() -> Path:
