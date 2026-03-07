@@ -218,8 +218,7 @@ def _render_consolidacao_manual() -> None:
 				st.info("Todos os produtos encontrados já estão no agrupamento.")
 			else:
 				total = len(resultados)
-				aviso_limite = " (primeiros 50)" if total == 50 else ""
-				st.write(f"**{len(disponiveis)} produto(s) disponível(eis){aviso_limite}:**")
+				st.write(f"**{len(disponiveis)} produto(s) disponível(eis) de {total} encontrado(s):**")
 				df_busca = pd.DataFrame(disponiveis)
 				if "descricoes_itens" not in df_busca.columns:
 					df_busca["descricoes_itens"] = ""
