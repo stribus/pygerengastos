@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,14 +14,92 @@ from src.logger import setup_logging
 
 _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
-_CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_CHROMA_PERSIST_DIR = _PROJECT_ROOT / "data" / "chroma"
+_EMBEDDINGS_CACHE_DIR = _PROJECT_ROOT / "cache" / "huggingface"
 
 _chroma_client: Optional[Client] = None
 _embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
 _sentence_model: Optional[SentenceTransformer] = None
+_sentence_model_lock = threading.Lock()
 
 
 logger = setup_logging(__name__)
+
+
+def obter_diretorio_cache_embeddings() -> Path:
+    """Retorna o diretório persistente usado para cache dos modelos HF."""
+    return _EMBEDDINGS_CACHE_DIR
+
+
+def _configurar_variaveis_cache_embeddings() -> Path:
+    cache_dir = obter_diretorio_cache_embeddings()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("HF_HOME", str(cache_dir))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(cache_dir))
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(cache_dir))
+    return cache_dir
+
+
+def _definir_modo_offline(habilitado: bool) -> None:
+    valor = "1" if habilitado else "0"
+    os.environ["HF_HUB_OFFLINE"] = valor
+    os.environ["TRANSFORMERS_OFFLINE"] = valor
+
+
+def _carregar_sentence_transformer(*, cache_dir: Path, local_files_only: bool) -> SentenceTransformer:
+    return SentenceTransformer(
+        _EMBEDDING_MODEL_NAME,
+        cache_folder=str(cache_dir),
+        local_files_only=local_files_only,
+    )
+
+
+def inicializar_modelo_embeddings() -> SentenceTransformer:
+    """Inicializa o modelo de embeddings usando cache local persistente."""
+    global _sentence_model
+    if _sentence_model is not None:
+        return _sentence_model
+
+    with _sentence_model_lock:
+        if _sentence_model is not None:
+            return _sentence_model
+
+        cache_dir = _configurar_variaveis_cache_embeddings()
+        try:
+            _sentence_model = _carregar_sentence_transformer(
+                cache_dir=cache_dir,
+                local_files_only=True,
+            )
+            _definir_modo_offline(True)
+            logger.info(
+                "Modelo de embeddings carregado do cache local (%s).",
+                cache_dir,
+            )
+            return _sentence_model
+        except Exception:
+            _definir_modo_offline(False)
+            logger.info(
+                "Modelo de embeddings não encontrado localmente em %s. "
+                "Tentando download inicial.",
+                cache_dir,
+            )
+
+        try:
+            _sentence_model = _carregar_sentence_transformer(
+                cache_dir=cache_dir,
+                local_files_only=False,
+            )
+            logger.info(
+                "Modelo de embeddings inicializado e armazenado em cache (%s).",
+                cache_dir,
+            )
+            return _sentence_model
+        except Exception as exc:
+            raise RuntimeError(
+                "Modelo de embeddings não encontrado no cache local. "
+                "Conecte à internet na primeira execução para baixar o modelo."
+            ) from exc
 
 
 def _ensure_persist_dir() -> Path:
@@ -43,6 +123,7 @@ def _get_embedding_function() -> embedding_functions.EmbeddingFunction:
     if _embedding_function is not None:
         return _embedding_function
 
+    inicializar_modelo_embeddings()
     _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=_EMBEDDING_MODEL_NAME,
     )
@@ -50,12 +131,7 @@ def _get_embedding_function() -> embedding_functions.EmbeddingFunction:
 
 
 def _get_sentence_model() -> SentenceTransformer:
-    global _sentence_model
-    if _sentence_model is not None:
-        return _sentence_model
-
-    _sentence_model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
-    return _sentence_model
+    return inicializar_modelo_embeddings()
 
 
 def _get_collection():
