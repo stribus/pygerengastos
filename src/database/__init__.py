@@ -2599,7 +2599,8 @@ def buscar_produtos(
 				p.marca_base,
 				c.nome as categoria_nome,
 				COUNT(DISTINCT a.id) as qtd_aliases,
-				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens
+				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens,
+				GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.descricao), '')) as descricoes_itens
 			FROM produtos p
 			LEFT JOIN categorias c ON c.id = p.categoria_id
 			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
@@ -2620,6 +2621,7 @@ def buscar_produtos(
 			"categoria_nome": row[3],
 			"qtd_aliases": row[4] or 0,
 			"qtd_itens": row[5] or 0,
+			"descricoes_itens": row[6] or "",
 		}
 		for row in rows
 	]
@@ -2740,7 +2742,7 @@ def consolidar_produtos(
 						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
 						[texto_alias]
 					).fetchone()
-					
+
 					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
 						# Alias já pertence ao produto de destino - operação nula, não é erro
 						logger.debug(
@@ -2781,7 +2783,7 @@ def consolidar_produtos(
 					0  # Será atualizado depois
 				]
 			)
-			
+
 			# Capturar ID do registro de auditoria inserido
 			auditoria_id = cursor.lastrowid
 

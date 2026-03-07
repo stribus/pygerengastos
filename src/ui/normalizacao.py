@@ -194,6 +194,18 @@ def _render_consolidacao_manual() -> None:
 			else:
 				st.write(f"**{len(disponiveis)} produto(s) disponível(eis):**")
 				df_busca = pd.DataFrame(disponiveis)
+				if "descricoes_itens" not in df_busca.columns:
+					df_busca["descricoes_itens"] = ""
+				colunas_busca = [
+					"id",
+					"nome_base",
+					"descricoes_itens",
+					"marca_base",
+					"categoria_nome",
+					"qtd_aliases",
+					"qtd_itens",
+				]
+				df_busca = df_busca[[c for c in colunas_busca if c in df_busca.columns]]
 				df_busca.insert(0, "adicionar", False)
 
 				df_editado = st.data_editor(
@@ -207,10 +219,11 @@ def _render_consolidacao_manual() -> None:
 						),
 						"id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
 						"nome_base": st.column_config.TextColumn("Nome", disabled=True, width="medium"),
+						"descricoes_itens": st.column_config.TextColumn("Descrições dos itens", disabled=True, width="large"),
 						"marca_base": st.column_config.TextColumn("Marca", disabled=True, width="small"),
 						"categoria_nome": st.column_config.TextColumn("Categoria", disabled=True, width="small"),
-						"qtd_itens": st.column_config.NumberColumn("Itens", disabled=True, width="small"),
-						"qtd_aliases": st.column_config.NumberColumn("Aliases", disabled=True, width="small"),
+						"qtd_itens": st.column_config.NumberColumn("Qtd Itens", disabled=True, width="small"),
+						"qtd_aliases": st.column_config.NumberColumn("Qtd Aliases", disabled=True, width="small"),
 					},
 					key="tabela_busca_manual",
 				)
@@ -228,6 +241,18 @@ def _render_consolidacao_manual() -> None:
 			st.markdown(f"### 🛒 Agrupamento ({len(agrupamento)} produto(s))")
 
 			df_agrupamento = pd.DataFrame(agrupamento)
+			if "descricoes_itens" not in df_agrupamento.columns:
+				df_agrupamento["descricoes_itens"] = ""
+			colunas_agrupamento = [
+				"id",
+				"nome_base",
+				"descricoes_itens",
+				"marca_base",
+				"categoria_nome",
+				"qtd_aliases",
+				"qtd_itens",
+			]
+			df_agrupamento = df_agrupamento[[c for c in colunas_agrupamento if c in df_agrupamento.columns]]
 			df_agrupamento.insert(0, "remover", False)
 
 			df_agrupamento_editado = st.data_editor(
@@ -238,10 +263,11 @@ def _render_consolidacao_manual() -> None:
 					"remover": st.column_config.CheckboxColumn("❌ Remover"),
 					"id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
 					"nome_base": st.column_config.TextColumn("Nome", disabled=True, width="medium"),
+					"descricoes_itens": st.column_config.TextColumn("Descrições dos itens", disabled=True, width="large"),
 					"marca_base": st.column_config.TextColumn("Marca", disabled=True, width="small"),
 					"categoria_nome": st.column_config.TextColumn("Categoria", disabled=True, width="small"),
-					"qtd_itens": st.column_config.NumberColumn("Itens", disabled=True, width="small"),
-					"qtd_aliases": st.column_config.NumberColumn("Aliases", disabled=True, width="small"),
+					"qtd_itens": st.column_config.NumberColumn("Qtd Itens", disabled=True, width="small"),
+					"qtd_aliases": st.column_config.NumberColumn("Qtd Aliases", disabled=True, width="small"),
 				},
 				key="tabela_agrupamento_manual",
 			)
