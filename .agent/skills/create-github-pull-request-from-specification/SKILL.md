@@ -19,6 +19,6 @@ Create GitHub Pull Request for the specification at `${workspaceFolder}/.github/
 
 ## Requirements
 - Single pull request for the complete specification
-- Clear title/pull_request_template.md identifying the specification
+- Clear title identifying the specification
 - Fill enough information into pull_request_template.md
 - Verify against existing pull requests before creation
