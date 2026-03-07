@@ -2591,8 +2591,19 @@ def buscar_produtos(
 
 	Retorna lista de produtos cujo nome_base, marca_base ou descrição de item contém o termo.
 	Limita os resultados ao número definido em ``limite`` (padrão: 50).
+
+	Observações:
+	- ``limite`` deve ser maior ou igual a 1; caso contrário, um ``ValueError`` é levantado.
+	- Termos muito curtos (após ``strip``) retornam lista vazia para evitar scans amplos.
 	"""
+	if limite < 1:
+		raise ValueError("limite deve ser >= 1")
+
 	termo_strip = termo.strip()
+	# Evita executar LIKE '%%' (ou padrões muito genéricos) que podem gerar scans desnecessários.
+	# Exige um mínimo de caracteres úteis após strip; ajuste conforme necessidade de negócio.
+	if len(termo_strip) < 3:
+		return []
 	with conexao(db_path) as con:
 		rows = con.execute(
 			"""
