@@ -49,12 +49,26 @@ def main() -> None:
 				_inicializar_recursos_embeddings()
 				st.session_state["embeddings_cache_inicializado"] = True
 				logger.info("Modelo de embeddings inicializado com cache local persistente")
-			except RuntimeError:
-				logger.warning("Modelo de embeddings indisponível no cache local")
-				st.warning(
-					"Modelo de embeddings não encontrado no cache local. "
-					"Conecte à internet na primeira execução para baixar o modelo em "
-					f"'{obter_diretorio_cache_embeddings()}'."
+			except RuntimeError as exc:
+				causa = getattr(exc, "__cause__", None)
+				if isinstance(causa, OSError):
+					logger.exception("Erro de acesso ao diretório de cache de embeddings: %s", exc)
+					st.error(
+						"Erro ao inicializar cache de embeddings. "
+						f"Verifique permissões de escrita em '{obter_diretorio_cache_embeddings()}'."
+					)
+				else:
+					logger.warning("Modelo de embeddings indisponível no cache local: %s", exc)
+					st.warning(
+						"Modelo de embeddings não encontrado no cache local. "
+						"Conecte à internet na primeira execução para baixar o modelo em "
+						f"'{obter_diretorio_cache_embeddings()}'."
+					)
+			except Exception as exc:
+				logger.exception("Erro ao inicializar cache de embeddings: %s", exc)
+				st.error(
+					"Erro inesperado ao inicializar cache de embeddings. "
+					f"Verifique configuração e acesso ao diretório '{obter_diretorio_cache_embeddings()}'."
 				)
 
 		# Inicialização do banco e categorias

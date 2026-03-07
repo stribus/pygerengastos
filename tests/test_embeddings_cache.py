@@ -61,6 +61,7 @@ def test_inicializar_modelo_embeddings_reutiliza_cache_local(tmp_path, monkeypat
     modelo = embeddings.inicializar_modelo_embeddings()
 
     assert modelo is modelo_esperado
+    assert cache_dir.exists()
     assert chamadas == [True]
     assert os.environ["HF_HUB_OFFLINE"] == "1"
     assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
@@ -98,8 +99,12 @@ def test_inicializar_modelo_embeddings_erro_sem_cache_e_sem_internet(tmp_path, m
 
     monkeypatch.setattr(embeddings, "_carregar_sentence_transformer", _fake_loader)
 
-    with pytest.raises(RuntimeError, match="Conecte à internet na primeira execução"):
+    with pytest.raises(RuntimeError, match="Verifique sua conexão com a internet na primeira execução"):
         embeddings.inicializar_modelo_embeddings()
+
+    assert cache_dir.exists()
+    assert os.environ["HF_HUB_OFFLINE"] == "0"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "0"
 
 
 def test_chroma_persistente_aponta_para_data_na_raiz():

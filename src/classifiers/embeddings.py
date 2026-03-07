@@ -34,7 +34,13 @@ def obter_diretorio_cache_embeddings() -> Path:
 
 def _configurar_variaveis_cache_embeddings() -> Path:
     cache_dir = obter_diretorio_cache_embeddings()
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Não foi possível criar/acessar diretório de cache de embeddings em '{cache_dir}'. "
+            "Verifique permissões de escrita."
+        ) from exc
     os.environ.setdefault("HF_HOME", str(cache_dir))
     os.environ.setdefault("TRANSFORMERS_CACHE", str(cache_dir))
     os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(cache_dir))
@@ -77,10 +83,17 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir,
             )
             return _sentence_model
-        except Exception:
+        except OSError:
             _definir_modo_offline(False)
             logger.info(
                 "Modelo de embeddings não encontrado localmente em %s. "
+                "Tentando download inicial.",
+                cache_dir,
+            )
+        except Exception:
+            _definir_modo_offline(False)
+            logger.exception(
+                "Erro inesperado ao carregar modelo de embeddings do cache local em %s. "
                 "Tentando download inicial.",
                 cache_dir,
             )
@@ -97,8 +110,9 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
             return _sentence_model
         except Exception as exc:
             raise RuntimeError(
-                "Modelo de embeddings não encontrado no cache local. "
-                "Conecte à internet na primeira execução para baixar o modelo."
+                "Falha ao inicializar o modelo de embeddings. "
+                "Verifique sua conexão com a internet na primeira execução e permissões de escrita em "
+                f"'{cache_dir}'."
             ) from exc
 
 
