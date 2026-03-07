@@ -32,6 +32,32 @@ def mock_chroma_client():
         yield mock_collection
 
 
+def test_get_client_usa_persistent_client(monkeypatch, tmp_path):
+    """Inicializa o ChromaDB com PersistentClient para compatibilidade com 1.5+."""
+    import src.classifiers.embeddings as emb_module
+
+    cliente_falso = object()
+    caminho_esperado = tmp_path / "chroma"
+    chamadas: list[str] = []
+
+    def _fake_persistent_client(*, path: str):
+        chamadas.append(path)
+        return cliente_falso
+
+    emb_module._chroma_client = None
+    monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
+    monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
+
+    try:
+        cliente = emb_module._get_client()
+    finally:
+        emb_module._chroma_client = None
+
+    assert cliente is cliente_falso
+    assert chamadas == [str(caminho_esperado)]
+    assert caminho_esperado.exists()
+
+
 class TestAtualizarProdutoIdEmbeddings:
     """Testes para atualizar_produto_id_embeddings()."""
 

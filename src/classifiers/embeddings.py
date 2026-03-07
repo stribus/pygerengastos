@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from chromadb import Client
-from chromadb.config import Settings
+import chromadb
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
@@ -14,9 +13,9 @@ _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
 _CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
 
-_chroma_client: Optional[Client] = None
-_embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
-_sentence_model: Optional[SentenceTransformer] = None
+_chroma_client: Any | None = None
+_embedding_function: embedding_functions.EmbeddingFunction | None = None
+_sentence_model: SentenceTransformer | None = None
 
 
 logger = setup_logging(__name__)
@@ -27,14 +26,13 @@ def _ensure_persist_dir() -> Path:
     return _CHROMA_PERSIST_DIR
 
 
-def _get_client() -> Client:
+def _get_client():
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client
 
     persist_dir = _ensure_persist_dir()
-    settings = Settings(persist_directory=str(persist_dir), is_persistent=True)
-    _chroma_client = Client(settings=settings)
+    _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
     return _chroma_client
 
 
@@ -60,12 +58,10 @@ def _get_sentence_model() -> SentenceTransformer:
 
 def _get_collection():
     client = _get_client()
-    if _CHROMA_COLLECTION_NAME not in {col.name for col in client.list_collections()}:
-        client.create_collection(
-            name=_CHROMA_COLLECTION_NAME,
-            embedding_function=_get_embedding_function(),
-        )
-    return client.get_collection(name=_CHROMA_COLLECTION_NAME)
+    return client.get_or_create_collection(
+        name=_CHROMA_COLLECTION_NAME,
+        embedding_function=_get_embedding_function(),
+    )
 
 
 def gerar_embedding(texto: str) -> List[float]:
