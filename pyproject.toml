@@ -23,6 +23,7 @@ dependencies = [
     "httpx>=0.26.0",
     "litellm>=1.80.8",
     "pandas>=2.2",
+    "pygments>=2.20.0",
     "python-dotenv>=1.0",
     "rapidfuzz>=3.14.3",
     "sentence-transformers==5.1.2",
