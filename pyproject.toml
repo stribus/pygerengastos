@@ -26,6 +26,7 @@ dependencies = [
     "pandas>=2.2",
     "python-dotenv>=1.0",
     "rapidfuzz>=3.14.3",
+    "requests>=2.33.0",
     "sentence-transformers==5.1.2",
     "streamlit==1.54.0",
     "tornado>=6.5.5",
