@@ -1,5 +1,5 @@
 aiohappyeyeballs==2.6.1
-aiohttp==3.13.3
+aiohttp==3.13.5
 aiosignal==1.4.0
 altair==6.0.0
 annotated-doc==0.0.4
@@ -45,7 +45,7 @@ joblib==1.5.2
 jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 kubernetes==35.0.0
-litellm==1.80.8
+litellm==1.83.0
 markdown-it-py==4.0.0
 markupsafe==3.0.3
 mdurl==0.1.2
@@ -64,7 +64,7 @@ opentelemetry-exporter-otlp-proto-grpc==1.39.0
 opentelemetry-proto==1.39.0
 opentelemetry-sdk==1.39.0
 opentelemetry-semantic-conventions==0.60b0
-orjson==3.11.5
+orjson==3.11.8
 overrides==7.7.0
 packaging==25.0
 pandas==2.3.3
@@ -78,7 +78,7 @@ pybase64==1.4.3
 pydantic==2.12.5
 pydantic-core==2.41.5
 pydeck==0.9.1
-pygments==2.19.2
+pygments==2.20.0
 pypika==0.48.9
 pyproject-hooks==1.2.0
 pyreadline3==3.5.4
@@ -90,7 +90,7 @@ pyyaml==6.0.3
 rapidfuzz==3.14.3
 referencing==0.37.0
 regex==2025.11.3
-requests==2.32.5
+requests==2.33.1
 requests-oauthlib==2.0.0
 rich==14.2.0
 rpds-py==0.30.0
@@ -112,7 +112,7 @@ tiktoken==0.12.0
 tokenizers==0.22.1
 toml==0.10.2
 torch==2.9.1
-tornado==6.5.2
+tornado==6.5.5
 tqdm==4.67.1
 transformers==5.0.0rc3
 typer==0.24.1
