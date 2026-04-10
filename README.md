@@ -99,7 +99,21 @@ Configure as variáveis de API no arquivo `.env` para habilitar a integração. 
 
 Para acelerar a identificação de produtos, o sistema gera embeddings SentenceTransformers para cada descrição registrada e armazena-os no ChromaDB local (`data/chroma`). Quando um item novo chega, a busca semântica tenta encontrar um produto já existente com similaridade acima de 0.82. Se houver um match, reaproveitamos o `produto_id`, `nome_base` e `marca_base`. Caso contrário, o LLM (Gemini via LiteLLM) continua sendo invocado para classificar o item e sugerir produto/categoria, e seus resultados enriquecem SQLite3 e o índice de embeddings.
 
-As dependências `chromadb==1.3.5` e `sentence-transformers==5.1.2` cuidam dessa camada. Garanta que o diretório `data/chroma` esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
+As dependências `chromadb==1.3.5` e `sentence-transformers==5.1.2` cuidam dessa camada. O ChromaDB usa diretório persistente fixo em `data/chroma`.
+
+### Cache offline de embeddings (Hugging Face)
+
+O app agora define automaticamente cache persistente para embeddings em `cache/huggingface`, configurando:
+
+- `HF_HOME`
+- `TRANSFORMERS_CACHE`
+- `SENTENCE_TRANSFORMERS_HOME`
+
+Fluxo recomendado:
+
+1. **Primeira execução (com internet):** o modelo `all-MiniLM-L6-v2` é baixado e salvo em `cache/huggingface`.
+2. **Execuções seguintes:** o app tenta carregar o modelo **somente do cache local** e ativa modo offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) quando o cache já existe.
+3. **Se o cache não existir e não houver internet:** a UI mostra aviso claro para conectar na primeira execução.
 
 ## Regenerando o índice semântico
 
@@ -167,4 +181,3 @@ Execute a suíte completa (scraper + SQLite3) para garantir que tudo esteja cons
 - Evoluir a integração do LiteLLM/Gemini (monitor de custo, retries e estratégias de fallback adicionais) e registrar histórico/correções manuais.
 - Persistir notas, itens e categorias em SQLite3 para consultas analíticas.
 - Construir dashboards Streamlit (lista de notas, filtros por período e gráficos mensais por categoria).
-
