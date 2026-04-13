@@ -68,7 +68,7 @@ orjson==3.11.8
 overrides==7.7.0
 packaging==25.0
 pandas==2.3.3
-pillow==12.1.1
+pillow==12.2.0
 pluggy==1.6.0
 posthog==5.4.0
 propcache==0.4.1
