@@ -14,6 +14,9 @@ from src.classifiers.embeddings import (
     upsert_descricao_embedding,
 )
 
+NUM_WORKERS_CONCORRENCIA = 8
+SLEEP_CONCORRENCIA_SIMULADO = 0.05
+
 
 def _sentence_transformer_disponivel() -> bool:
     """Verifica se o modelo SentenceTransformer pode ser carregado."""
@@ -101,11 +104,11 @@ def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_pa
     caminho_esperado = tmp_path / "chroma"
     cliente_falso = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(8)
+    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
 
     def _fake_persistent_client(*, path: str):
         chamadas.append(path)
-        time.sleep(0.05)
+        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
         return cliente_falso
 
     def _worker():
@@ -115,8 +118,8 @@ def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_pa
     monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
     monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(8)))
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
     assert resultados == [cliente_falso] * 8
     assert chamadas == [str(caminho_esperado)]
@@ -128,11 +131,11 @@ def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeyp
 
     embedding_function_falsa = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(8)
+    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
 
     def _fake_embedding_function(*, model_name: str):
         chamadas.append(model_name)
-        time.sleep(0.05)
+        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
         return embedding_function_falsa
 
     def _worker():
@@ -145,8 +148,8 @@ def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeyp
         _fake_embedding_function,
     )
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(8)))
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
     assert resultados == [embedding_function_falsa] * 8
     assert chamadas == ["all-MiniLM-L6-v2"]
@@ -158,11 +161,11 @@ def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch
 
     sentence_model_falso = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(8)
+    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
 
     def _fake_sentence_transformer(model_name: str):
         chamadas.append(model_name)
-        time.sleep(0.05)
+        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
         return sentence_model_falso
 
     def _worker():
@@ -171,8 +174,8 @@ def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch
 
     monkeypatch.setattr(emb_module, "SentenceTransformer", _fake_sentence_transformer)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(8)))
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
     assert resultados == [sentence_model_falso] * 8
     assert chamadas == ["all-MiniLM-L6-v2"]
