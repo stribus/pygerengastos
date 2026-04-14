@@ -19,7 +19,7 @@ _chroma_client: ClientAPI | None = None
 _embedding_function: embedding_functions.EmbeddingFunction | None = None
 _sentence_model: SentenceTransformer | None = None
 # Double-checked locking mantém o fast path sem lock após a inicialização
-# e evita recriação concorrente dos singletons no bootstrap do Streamlit.
+# e evita a race condition de recriar singletons durante sessões simultâneas do Streamlit.
 _client_lock = threading.Lock()
 _embedding_function_lock = threading.Lock()
 _sentence_model_lock = threading.Lock()

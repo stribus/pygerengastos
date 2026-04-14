@@ -14,8 +14,8 @@ from src.classifiers.embeddings import (
     upsert_descricao_embedding,
 )
 
-NUM_WORKERS_CONCORRENCIA = 8
-SLEEP_CONCORRENCIA_SIMULADO = 0.05
+NUM_CONCURRENT_WORKERS = 8
+SIMULATED_DELAY_SECONDS = 0.05
 
 
 def _sentence_transformer_disponivel() -> bool:
@@ -97,49 +97,49 @@ def test_get_collection_usa_get_or_create_collection(monkeypatch):
     )
 
 
-def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_path):
+def test_client_thread_safe(monkeypatch, tmp_path):
     """Protege a inicialização do cliente Chroma contra condições de corrida."""
     import src.classifiers.embeddings as emb_module
 
     caminho_esperado = tmp_path / "chroma"
     cliente_falso = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
 
     def _fake_persistent_client(*, path: str):
         chamadas.append(path)
-        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
+        time.sleep(SIMULATED_DELAY_SECONDS)
         return cliente_falso
 
     def _worker():
-        barreira.wait()
+        sync_barrier.wait()
         return emb_module._get_client()
 
     monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
     monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
 
-    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
 
-    assert resultados == [cliente_falso] * NUM_WORKERS_CONCORRENCIA
+    assert resultados == [cliente_falso] * NUM_CONCURRENT_WORKERS
     assert chamadas == [str(caminho_esperado)]
 
 
-def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeypatch):
+def test_embedding_function_thread_safe(monkeypatch):
     """Evita recriar a embedding function quando múltiplas threads acessam o cache."""
     import src.classifiers.embeddings as emb_module
 
     embedding_function_falsa = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
 
     def _fake_embedding_function(*, model_name: str):
         chamadas.append(model_name)
-        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
+        time.sleep(SIMULATED_DELAY_SECONDS)
         return embedding_function_falsa
 
     def _worker():
-        barreira.wait()
+        sync_barrier.wait()
         return emb_module._get_embedding_function()
 
     monkeypatch.setattr(
@@ -148,36 +148,36 @@ def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeyp
         _fake_embedding_function,
     )
 
-    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
 
-    assert resultados == [embedding_function_falsa] * NUM_WORKERS_CONCORRENCIA
+    assert resultados == [embedding_function_falsa] * NUM_CONCURRENT_WORKERS
     assert chamadas == ["all-MiniLM-L6-v2"]
 
 
-def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch):
+def test_sentence_model_thread_safe(monkeypatch):
     """Evita múltiplas instâncias do SentenceTransformer em acesso concorrente."""
     import src.classifiers.embeddings as emb_module
 
     sentence_model_falso = object()
     chamadas: list[str] = []
-    barreira = threading.Barrier(NUM_WORKERS_CONCORRENCIA)
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
 
     def _fake_sentence_transformer(model_name: str):
         chamadas.append(model_name)
-        time.sleep(SLEEP_CONCORRENCIA_SIMULADO)
+        time.sleep(SIMULATED_DELAY_SECONDS)
         return sentence_model_falso
 
     def _worker():
-        barreira.wait()
+        sync_barrier.wait()
         return emb_module._get_sentence_model()
 
     monkeypatch.setattr(emb_module, "SentenceTransformer", _fake_sentence_transformer)
 
-    with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
-        resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
 
-    assert resultados == [sentence_model_falso] * NUM_WORKERS_CONCORRENCIA
+    assert resultados == [sentence_model_falso] * NUM_CONCURRENT_WORKERS
     assert chamadas == ["all-MiniLM-L6-v2"]
 
 
