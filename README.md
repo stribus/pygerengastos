@@ -48,12 +48,12 @@ Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação
 
 ## Gerenciando dependências
 
-- `requirements.in` contém apenas as dependências de alto nível do projeto.
+- `pyproject.toml` é a fonte única das dependências de produção e desenvolvimento.
 - `requirements.txt` é gerado automaticamente e **não deve ser editado manualmente**.
 - Para atualizar versões e regenerar o pinning reproduzível, use:
 
 ```pwsh
-    uv pip compile requirements.in -o requirements.txt --upgrade
+    uv pip compile pyproject.toml --all-extras -o requirements.txt
 ```
 
 - Para instalar o conjunto compilado, prefira:
@@ -76,7 +76,7 @@ Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação
 ```pwsh
 
     .\.venv\script\activate.ps1
-    streamlit run .\main.py 
+    streamlit run .\main.py
 ```
 
 ## Fluxo atual de importação
