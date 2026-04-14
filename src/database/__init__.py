@@ -2581,6 +2581,76 @@ def listar_produtos_similares(
 	return sorted(clusters, key=lambda c: len(c["produtos"]), reverse=True)
 
 
+def buscar_produtos(
+	termo: str,
+	limite: int = 50,
+	*,
+	db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+	"""Busca produtos por nome, marca ou descrição de item para consolidação manual.
+
+	Retorna lista de produtos cujo nome_base, marca_base ou descrição de item contém o termo.
+	Limita os resultados ao número definido em ``limite`` (padrão: 50).
+
+	Observações:
+	- ``limite`` deve ser maior ou igual a 1; caso contrário, um ``ValueError`` é levantado.
+	- Termos muito curtos (após ``strip``) retornam lista vazia para evitar scans amplos.
+	"""
+	if limite < 1:
+		raise ValueError("limite deve ser >= 1")
+
+	termo_strip = termo.strip()
+	# Evita executar LIKE '%%' (ou padrões muito genéricos) que podem gerar scans desnecessários.
+	# Exige um mínimo de caracteres úteis após strip; ajuste conforme necessidade de negócio.
+	if len(termo_strip) < 3:
+		return []
+	with conexao(db_path) as con:
+		rows = con.execute(
+			"""
+			SELECT
+				p.id,
+				p.nome_base,
+				p.marca_base,
+				c.nome as categoria_nome,
+				COUNT(DISTINCT a.id) as qtd_aliases,
+				COUNT(DISTINCT i.chave_acesso || '-' || i.sequencia) as qtd_itens,
+				-- resumo (truncado) das descrições de itens para evitar strings muito grandes
+				SUBSTR(
+					GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.descricao), '')),
+					1,
+					1000
+				) as descricoes_itens
+			FROM produtos p
+			LEFT JOIN categorias c ON c.id = p.categoria_id
+			LEFT JOIN aliases_produtos a ON a.produto_id = p.id
+			LEFT JOIN itens i ON i.produto_id = p.id
+			WHERE
+				-- LIKE é case-insensitive para ASCII por padrão no SQLite;
+				-- para acentuados (ex.: Á/á), a comparação é case-sensitive.
+				p.nome_base LIKE ?
+    			OR p.marca_base LIKE ?
+       			OR i.descricao LIKE ?
+			GROUP BY p.id
+			ORDER BY p.nome_base
+			LIMIT ?
+			""",
+			[f"%{termo_strip}%", f"%{termo_strip}%", f"%{termo_strip}%", limite]
+		).fetchall()
+
+	return [
+		{
+			"id": row[0],
+			"nome_base": row[1],
+			"marca_base": row[2],
+			"categoria_nome": row[3],
+			"qtd_aliases": row[4] or 0,
+			"qtd_itens": row[5] or 0,
+			"descricoes_itens": row[6] or "",
+		}
+		for row in rows
+	]
+
+
 def consolidar_produtos(
 	produto_id_origem: int,
 	produto_id_destino: int,
@@ -2696,7 +2766,7 @@ def consolidar_produtos(
 						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
 						[texto_alias]
 					).fetchone()
-					
+
 					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
 						# Alias já pertence ao produto de destino - operação nula, não é erro
 						logger.debug(
@@ -2737,7 +2807,7 @@ def consolidar_produtos(
 					0  # Será atualizado depois
 				]
 			)
-			
+
 			# Capturar ID do registro de auditoria inserido
 			auditoria_id = cursor.lastrowid
 

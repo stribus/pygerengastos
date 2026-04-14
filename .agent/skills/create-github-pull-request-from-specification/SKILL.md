@@ -10,15 +10,15 @@ Create GitHub Pull Request for the specification at `${workspaceFolder}/.github/
 ## Process
 
 1. Analyze specification file template from '${workspaceFolder}/.github/pull_request_template.md' to extract requirements by 'search' tool.
-2. Create pull request draft template by using 'create_pull_request' tool on to `${input:targetBranch}`. and make sure don't have any pull request of current branch was exist `get_pull_request`. If has continue to step 4, and skip step 3.
-3. Get changes in pull request by using 'get_pull_request_diff' tool to analyze information that was changed in pull Request.
-4. Update the pull request body and title created in the previous step using the 'update_pull_request' tool. Incorporate the information from the template obtained in the first step to update the body and title as needed.
-5. Switch from draft to ready for review by using 'update_pull_request' tool. To update state of pull request.
-6. Using 'get_me' to get username of person was created pull request and assign to `update_issue` tool. To assign pull request
-7. Response URL Pull request was create to user.
+2. Create a pull request draft using the `create_pull_request` tool for the `${input:targetBranch}`. Check if a pull request for the current branch already exists using `get_pull_request`. If one exists, continue to step 4 and skip step 3.
+3. Get the changes in the pull request using the `get_pull_request_diff` tool to analyze the changed information.
+4. Update the pull request body and title created in the previous step using the `update_pull_request` tool. Incorporate the information from the template obtained in the first step to update the body and title as needed.
+5. Change the pull request state from draft to ready for review using the `update_pull_request` tool.
+6. Use `get_me` to get the username of the person who created the pull request and assign it using the `update_pull_request` tool.
+7. Respond with the URL of the created pull request to the user.
 
 ## Requirements
 - Single pull request for the complete specification
-- Clear title/pull_request_template.md identifying the specification
+- Clear title identifying the specification
 - Fill enough information into pull_request_template.md
 - Verify against existing pull requests before creation
