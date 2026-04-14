@@ -121,7 +121,7 @@ def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_pa
     with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
         resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
-    assert resultados == [cliente_falso] * 8
+    assert resultados == [cliente_falso] * NUM_WORKERS_CONCORRENCIA
     assert chamadas == [str(caminho_esperado)]
 
 
@@ -151,7 +151,7 @@ def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeyp
     with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
         resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
-    assert resultados == [embedding_function_falsa] * 8
+    assert resultados == [embedding_function_falsa] * NUM_WORKERS_CONCORRENCIA
     assert chamadas == ["all-MiniLM-L6-v2"]
 
 
@@ -177,7 +177,7 @@ def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch
     with ThreadPoolExecutor(max_workers=NUM_WORKERS_CONCORRENCIA) as executor:
         resultados = list(executor.map(lambda _: _worker(), range(NUM_WORKERS_CONCORRENCIA)))
 
-    assert resultados == [sentence_model_falso] * 8
+    assert resultados == [sentence_model_falso] * NUM_WORKERS_CONCORRENCIA
     assert chamadas == ["all-MiniLM-L6-v2"]
 
 
