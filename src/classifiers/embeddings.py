@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -17,6 +18,9 @@ _CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
 _chroma_client: ClientAPI | None = None
 _embedding_function: embedding_functions.EmbeddingFunction | None = None
 _sentence_model: SentenceTransformer | None = None
+_client_lock = threading.Lock()
+_embedding_function_lock = threading.Lock()
+_sentence_model_lock = threading.Lock()
 
 
 logger = setup_logging(__name__)
@@ -32,8 +36,12 @@ def _get_client() -> ClientAPI:
     if _chroma_client is not None:
         return _chroma_client
 
-    persist_dir = _ensure_persist_dir()
-    _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
+    with _client_lock:
+        if _chroma_client is not None:
+            return _chroma_client
+
+        persist_dir = _ensure_persist_dir()
+        _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
     return _chroma_client
 
 
@@ -42,9 +50,13 @@ def _get_embedding_function() -> embedding_functions.EmbeddingFunction:
     if _embedding_function is not None:
         return _embedding_function
 
-    _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=_EMBEDDING_MODEL_NAME,
-    )
+    with _embedding_function_lock:
+        if _embedding_function is not None:
+            return _embedding_function
+
+        _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=_EMBEDDING_MODEL_NAME,
+        )
     return _embedding_function
 
 
@@ -53,7 +65,11 @@ def _get_sentence_model() -> SentenceTransformer:
     if _sentence_model is not None:
         return _sentence_model
 
-    _sentence_model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
+    with _sentence_model_lock:
+        if _sentence_model is not None:
+            return _sentence_model
+
+        _sentence_model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
     return _sentence_model
 
 

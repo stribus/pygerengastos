@@ -1,7 +1,9 @@
 """Testes para consolidação de embeddings (atualização de produto_id)."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,9 +40,15 @@ def limpar_cache_chroma():
     import src.classifiers.embeddings as emb_module
 
     cache_original = emb_module._chroma_client
+    embedding_function_original = emb_module._embedding_function
+    sentence_model_original = emb_module._sentence_model
     emb_module._chroma_client = None
+    emb_module._embedding_function = None
+    emb_module._sentence_model = None
     yield
     emb_module._chroma_client = cache_original
+    emb_module._embedding_function = embedding_function_original
+    emb_module._sentence_model = sentence_model_original
 
 
 def test_get_client_usa_persistent_client(monkeypatch, tmp_path):
@@ -83,6 +91,90 @@ def test_get_collection_usa_get_or_create_collection(monkeypatch):
         name="produtos",
         embedding_function="embedding-fn",
     )
+
+
+def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_path):
+    """Protege a inicialização do cliente Chroma contra condições de corrida."""
+    import src.classifiers.embeddings as emb_module
+
+    caminho_esperado = tmp_path / "chroma"
+    cliente_falso = object()
+    chamadas: list[str] = []
+    barreira = threading.Barrier(8)
+
+    def _fake_persistent_client(*, path: str):
+        chamadas.append(path)
+        threading.Event().wait(0.05)
+        return cliente_falso
+
+    def _worker():
+        barreira.wait()
+        return emb_module._get_client()
+
+    monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
+    monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(8)))
+
+    assert resultados == [cliente_falso] * 8
+    assert chamadas == [str(caminho_esperado)]
+
+
+def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeypatch):
+    """Evita recriar a embedding function quando múltiplas threads acessam o cache."""
+    import src.classifiers.embeddings as emb_module
+
+    embedding_function_falsa = object()
+    chamadas: list[str] = []
+    barreira = threading.Barrier(8)
+
+    def _fake_embedding_function(*, model_name: str):
+        chamadas.append(model_name)
+        threading.Event().wait(0.05)
+        return embedding_function_falsa
+
+    def _worker():
+        barreira.wait()
+        return emb_module._get_embedding_function()
+
+    monkeypatch.setattr(
+        emb_module.embedding_functions,
+        "SentenceTransformerEmbeddingFunction",
+        _fake_embedding_function,
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(8)))
+
+    assert resultados == [embedding_function_falsa] * 8
+    assert chamadas == ["all-MiniLM-L6-v2"]
+
+
+def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch):
+    """Evita múltiplas instâncias do SentenceTransformer em acesso concorrente."""
+    import src.classifiers.embeddings as emb_module
+
+    sentence_model_falso = object()
+    chamadas: list[str] = []
+    barreira = threading.Barrier(8)
+
+    def _fake_sentence_transformer(model_name: str):
+        chamadas.append(model_name)
+        threading.Event().wait(0.05)
+        return sentence_model_falso
+
+    def _worker():
+        barreira.wait()
+        return emb_module._get_sentence_model()
+
+    monkeypatch.setattr(emb_module, "SentenceTransformer", _fake_sentence_transformer)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(8)))
+
+    assert resultados == [sentence_model_falso] * 8
+    assert chamadas == ["all-MiniLM-L6-v2"]
 
 
 class TestAtualizarProdutoIdEmbeddings:
