@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -104,7 +105,7 @@ def test_get_client_inicializa_uma_unica_vez_em_concorrencia(monkeypatch, tmp_pa
 
     def _fake_persistent_client(*, path: str):
         chamadas.append(path)
-        threading.Event().wait(0.05)
+        time.sleep(0.05)
         return cliente_falso
 
     def _worker():
@@ -131,7 +132,7 @@ def test_get_embedding_function_inicializa_uma_unica_vez_em_concorrencia(monkeyp
 
     def _fake_embedding_function(*, model_name: str):
         chamadas.append(model_name)
-        threading.Event().wait(0.05)
+        time.sleep(0.05)
         return embedding_function_falsa
 
     def _worker():
@@ -161,7 +162,7 @@ def test_get_sentence_model_inicializa_uma_unica_vez_em_concorrencia(monkeypatch
 
     def _fake_sentence_transformer(model_name: str):
         chamadas.append(model_name)
-        threading.Event().wait(0.05)
+        time.sleep(0.05)
         return sentence_model_falso
 
     def _worker():
