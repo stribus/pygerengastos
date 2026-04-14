@@ -82,7 +82,7 @@ pygments==2.20.0
 pypika==0.48.9
 pyproject-hooks==1.2.0
 pyreadline3==3.5.4
-pytest==9.0.2
+pytest==9.0.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 pytz==2025.2
