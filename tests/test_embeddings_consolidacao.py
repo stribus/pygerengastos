@@ -1,7 +1,10 @@
 """Testes para consolidação de embeddings (atualização de produto_id)."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +13,9 @@ from src.classifiers.embeddings import (
     atualizar_produto_id_embeddings,
     upsert_descricao_embedding,
 )
+
+NUM_CONCURRENT_WORKERS = 8
+SIMULATED_DELAY_SECONDS = 0.05
 
 
 def _sentence_transformer_disponivel() -> bool:
@@ -30,6 +36,165 @@ def mock_chroma_client():
         mock_collection = MagicMock()
         mock_get_collection.return_value = mock_collection
         yield mock_collection
+
+
+@pytest.fixture(autouse=True)
+def limpar_cache_chroma():
+    """Evita contaminação de estado global entre testes de embeddings."""
+    import src.classifiers.embeddings as emb_module
+
+    cache_original = emb_module._chroma_client
+    embedding_function_original = emb_module._embedding_function
+    sentence_model_original = emb_module._sentence_model
+    emb_module._chroma_client = None
+    emb_module._embedding_function = None
+    emb_module._sentence_model = None
+    yield
+    emb_module._chroma_client = cache_original
+    emb_module._embedding_function = embedding_function_original
+    emb_module._sentence_model = sentence_model_original
+
+
+def test_get_client_usa_persistent_client(monkeypatch, tmp_path):
+    """Inicializa o ChromaDB com PersistentClient para compatibilidade com 1.5+."""
+    import src.classifiers.embeddings as emb_module
+
+    cliente_falso = object()
+    caminho_esperado = tmp_path / "chroma"
+    chamadas: list[str] = []
+
+    def _fake_persistent_client(*, path: str):
+        chamadas.append(path)
+        return cliente_falso
+
+    monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
+    monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
+
+    cliente = emb_module._get_client()
+
+    assert cliente is cliente_falso
+    assert chamadas == [str(caminho_esperado)]
+    assert caminho_esperado.exists()
+
+
+def test_get_collection_usa_get_or_create_collection(monkeypatch):
+    """Obtém a coleção via get_or_create_collection na API nova do Chroma."""
+    import src.classifiers.embeddings as emb_module
+
+    colecao_falsa = object()
+    cliente_falso = MagicMock()
+    cliente_falso.get_or_create_collection.return_value = colecao_falsa
+
+    monkeypatch.setattr(emb_module, "_get_client", lambda: cliente_falso)
+    monkeypatch.setattr(emb_module, "_get_embedding_function", lambda: "embedding-fn")
+
+    colecao = emb_module._get_collection()
+
+    assert colecao is colecao_falsa
+    cliente_falso.get_or_create_collection.assert_called_once_with(
+        name="produtos",
+        embedding_function="embedding-fn",
+    )
+
+
+def test_client_thread_safe(monkeypatch, tmp_path):
+    """Protege a inicialização do cliente Chroma contra condições de corrida."""
+    import src.classifiers.embeddings as emb_module
+
+    caminho_esperado = tmp_path / "chroma"
+    cliente_falso = object()
+    chamadas: list[str] = []
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
+
+    def _fake_persistent_client(*, path: str):
+        chamadas.append(path)
+        time.sleep(SIMULATED_DELAY_SECONDS)
+        return cliente_falso
+
+    def _worker():
+        sync_barrier.wait()
+        return emb_module._get_client()
+
+    monkeypatch.setattr(emb_module, "_CHROMA_PERSIST_DIR", caminho_esperado)
+    monkeypatch.setattr(emb_module.chromadb, "PersistentClient", _fake_persistent_client)
+
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
+
+    assert resultados == [cliente_falso] * NUM_CONCURRENT_WORKERS
+    assert chamadas == [str(caminho_esperado)]
+
+
+def test_embedding_function_thread_safe(monkeypatch):
+    """Evita recriar a embedding function quando múltiplas threads acessam o cache."""
+    import src.classifiers.embeddings as emb_module
+
+    embedding_function_falsa = object()
+    chamadas: list[str] = []
+    chamadas_inicializacao: list[str] = []
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
+
+    def _fake_embedding_function(*, model_name: str):
+        chamadas.append(model_name)
+        time.sleep(SIMULATED_DELAY_SECONDS)
+        return embedding_function_falsa
+
+    def _fake_inicializar_modelo_embeddings():
+        chamadas_inicializacao.append("init")
+        return object()
+
+    def _worker():
+        sync_barrier.wait()
+        return emb_module._get_embedding_function()
+
+    monkeypatch.setattr(
+        emb_module,
+        "inicializar_modelo_embeddings",
+        _fake_inicializar_modelo_embeddings,
+    )
+    monkeypatch.setattr(
+        emb_module.embedding_functions,
+        "SentenceTransformerEmbeddingFunction",
+        _fake_embedding_function,
+    )
+
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
+
+    assert resultados == [embedding_function_falsa] * NUM_CONCURRENT_WORKERS
+    assert chamadas == ["all-MiniLM-L6-v2"]
+    assert chamadas_inicializacao == ["init"]
+
+
+def test_sentence_model_thread_safe(monkeypatch, tmp_path):
+    """Evita múltiplas instâncias do SentenceTransformer em acesso concorrente."""
+    import src.classifiers.embeddings as emb_module
+
+    sentence_model_falso = object()
+    chamadas_local_files_only: list[bool] = []
+    chamadas_cache_dir: list[Path] = []
+    sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
+    cache_dir = tmp_path / "hf_cache"
+
+    def _fake_sentence_transformer(*, cache_dir: Path, local_files_only: bool):
+        chamadas_local_files_only.append(local_files_only)
+        chamadas_cache_dir.append(cache_dir)
+        time.sleep(SIMULATED_DELAY_SECONDS)
+        return sentence_model_falso
+
+    def _worker():
+        sync_barrier.wait()
+        return emb_module._get_sentence_model()
+
+    monkeypatch.setattr(emb_module, "_EMBEDDINGS_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(emb_module, "_carregar_sentence_transformer", _fake_sentence_transformer)
+
+    with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
+        resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
+
+    assert resultados == [sentence_model_falso] * NUM_CONCURRENT_WORKERS
+    assert chamadas_local_files_only == [True]
+    assert chamadas_cache_dir == [cache_dir]
 
 
 class TestAtualizarProdutoIdEmbeddings:

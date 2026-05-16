@@ -56,7 +56,7 @@ foreach ($item in $itemsToCopy) {
 # limpar dados pesados
 $dataPath = Join-Path $packagePath "data"
 if (Test-Path $dataPath) {
-	Get-ChildItem -Path $dataPath -Recurse -Include *.duckdb, *.sqlite3 | Remove-Item -Force -ErrorAction SilentlyContinue
+	Get-ChildItem -Path $dataPath -Recurse -Include *.sqlite3 | Remove-Item -Force -ErrorAction SilentlyContinue
 	$chromaPath = Join-Path $dataPath "chroma"
 	if (Test-Path $chromaPath) {
 		Remove-Item -Path $chromaPath -Recurse -Force
