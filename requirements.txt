@@ -77,7 +77,7 @@ fsspec==2026.3.0
     #   torch
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.46
+gitpython==3.1.50
     # via streamlit
 googleapis-common-protos==1.74.0
     # via opentelemetry-exporter-otlp-proto-grpc
@@ -253,13 +253,15 @@ pypika==0.51.1
     # via chromadb
 pyproject-hooks==1.2.0
     # via build
+
+pyreadline3==3.5.4
 pytest==9.0.3
     # via gerenciador-de-despesa (pyproject.toml)
 python-dateutil==2.9.0.post0
     # via
     #   kubernetes
     #   pandas
-python-dotenv==1.0.1
+python-dotenv==1.2.2
     # via
     #   gerenciador-de-despesa (pyproject.toml)
     #   litellm
@@ -385,7 +387,7 @@ typing-inspection==0.4.2
     #   pydantic-settings
 tzdata==2026.1
     # via pandas
-urllib3==2.6.3
+urllib3==2.7.0
     # via
     #   kubernetes
     #   requests

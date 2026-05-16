@@ -16,6 +16,7 @@ _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CHROMA_PERSIST_DIR = _PROJECT_ROOT / "data" / "chroma"
+# Diretório persistente compartilhado entre execuções para cache dos modelos da Hugging Face.
 _EMBEDDINGS_CACHE_DIR = _PROJECT_ROOT / "cache" / "huggingface"
 
 _chroma_client: ClientAPI | None = None
@@ -130,6 +131,7 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir,
             )
 
+        # Fallback para download inicial quando o cache local não tem o modelo.
         try:
             _sentence_model = _carregar_sentence_transformer(
                 cache_dir=cache_dir,
