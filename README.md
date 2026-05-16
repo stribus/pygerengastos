@@ -36,22 +36,47 @@ Aplicação em Python + Streamlit que importa notas fiscais eletrônicas (NFC-e)
 
 ## Setup rápido
 
-No PowerShell, use a virtualenv local e instale as dependências com o `uv pip`:
+No PowerShell, use uma virtualenv local e sincronize as dependências compiladas:
 
 ```pwsh
     uv venv
     .\.venv\Scripts\Activate.ps1
-    uv pip install -r requirements.txt
+    uv pip sync requirements.txt
 ```
 
 Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação ou os testes.
+
+## Gerenciando dependências
+
+- `pyproject.toml` é a fonte única das dependências de produção e desenvolvimento.
+- `requirements.txt` é gerado automaticamente e **não deve ser editado manualmente**.
+- Para atualizar versões e regenerar o pinning reproduzível, use:
+
+```pwsh
+    uv pip compile pyproject.toml --all-extras -o requirements.txt
+```
+
+- Para instalar o conjunto compilado, prefira:
+
+```pwsh
+    uv pip sync requirements.txt
+```
+
+  Esse comando remove pacotes que não estão mais listados no arquivo compilado, ajudando a manter o ambiente limpo e reproduzível.
+  Em ambientes de desenvolvimento, use-o com atenção porque pacotes instalados manualmente fora do `requirements.txt` também serão removidos.
+
+- Se `uv` não estiver disponível, o fallback continua sendo:
+
+```pwsh
+    pip install -r requirements.txt
+```
 
 ## Rodando
 
 ```pwsh
 
     .\.venv\script\activate.ps1
-    streamlit run .\main.py 
+    streamlit run .\main.py
 ```
 
 ## Fluxo atual de importação
@@ -99,7 +124,21 @@ Configure as variáveis de API no arquivo `.env` para habilitar a integração. 
 
 Para acelerar a identificação de produtos, o sistema gera embeddings SentenceTransformers para cada descrição registrada e armazena-os no ChromaDB local (`data/chroma`). Quando um item novo chega, a busca semântica tenta encontrar um produto já existente com similaridade acima de 0.82. Se houver um match, reaproveitamos o `produto_id`, `nome_base` e `marca_base`. Caso contrário, o LLM (Gemini via LiteLLM) continua sendo invocado para classificar o item e sugerir produto/categoria, e seus resultados enriquecem SQLite3 e o índice de embeddings.
 
-As dependências `chromadb==1.3.5` e `sentence-transformers==5.1.2` cuidam dessa camada. Garanta que o diretório `data/chroma` esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
+As dependências `chromadb>=1.5.7` e `sentence-transformers>=5.2.3` cuidam dessa camada. O cliente local do Chroma usa persistência em `data/chroma`, então garanta que esse diretório esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
+
+### Cache offline de embeddings (Hugging Face)
+
+O app agora define automaticamente cache persistente para embeddings em `cache/huggingface`, configurando:
+
+- `HF_HOME`
+- `TRANSFORMERS_CACHE`
+- `SENTENCE_TRANSFORMERS_HOME`
+
+Fluxo recomendado:
+
+1. **Primeira execução (com internet):** o modelo `all-MiniLM-L6-v2` é baixado e salvo em `cache/huggingface`.
+2. **Execuções seguintes:** o app tenta carregar o modelo **somente do cache local** e ativa modo offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) quando o cache já existe.
+3. **Se o cache não existir e não houver internet:** a UI mostra aviso claro para conectar na primeira execução.
 
 ## Regenerando o índice semântico
 
@@ -167,4 +206,3 @@ Execute a suíte completa (scraper + SQLite3) para garantir que tudo esteja cons
 - Evoluir a integração do LiteLLM/Gemini (monitor de custo, retries e estratégias de fallback adicionais) e registrar histórico/correções manuais.
 - Persistir notas, itens e categorias em SQLite3 para consultas analíticas.
 - Construir dashboards Streamlit (lista de notas, filtros por período e gráficos mensais por categoria).
-
