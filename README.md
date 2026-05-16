@@ -124,7 +124,7 @@ Configure as variáveis de API no arquivo `.env` para habilitar a integração. 
 
 Para acelerar a identificação de produtos, o sistema gera embeddings SentenceTransformers para cada descrição registrada e armazena-os no ChromaDB local (`data/chroma`). Quando um item novo chega, a busca semântica tenta encontrar um produto já existente com similaridade acima de 0.82. Se houver um match, reaproveitamos o `produto_id`, `nome_base` e `marca_base`. Caso contrário, o LLM (Gemini via LiteLLM) continua sendo invocado para classificar o item e sugerir produto/categoria, e seus resultados enriquecem SQLite3 e o índice de embeddings.
 
-As dependências `chromadb>=1.5.7` e `sentence-transformers>=5.2.3` cuidam dessa camada. O cliente local do Chroma usa persistência em `data/chroma`, então garanta que esse diretório esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
+As dependências `chromadb>=1.5.7` e `sentence-transformers==5.4.0` cuidam dessa camada. O cliente local do Chroma usa persistência em `data/chroma`, então garanta que esse diretório esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
 
 ### Cache offline de embeddings (Hugging Face)
 

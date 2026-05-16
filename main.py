@@ -71,7 +71,8 @@ def main() -> None:
 				logger.exception("Erro ao inicializar cache de embeddings")
 				st.error(
 					"Erro inesperado ao inicializar cache de embeddings. "
-					f"Verifique configuração e acesso ao diretório '{obter_diretorio_cache_embeddings()}'."
+					f"Verifique configuração e acesso ao diretório '{obter_diretorio_cache_embeddings()}'. "
+					"Consulte também os logs em 'logs/app.log'."
 				)
 
 		# Inicialização do banco e categorias

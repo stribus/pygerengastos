@@ -131,6 +131,7 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir,
             )
 
+        # Fallback para download inicial quando o cache local não tem o modelo.
         try:
             _sentence_model = _carregar_sentence_transformer(
                 cache_dir=cache_dir,

@@ -155,6 +155,28 @@ def test_cache_embeddings_aponta_para_cache_na_raiz():
     assert embeddings._EMBEDDINGS_CACHE_DIR == esperado
 
 
+def test_inicializar_modelo_embeddings_cria_diretorios_persistentes(tmp_path, monkeypatch):
+    chroma_dir = tmp_path / "data" / "chroma"
+    cache_dir = tmp_path / "cache" / "huggingface"
+    monkeypatch.setattr(embeddings, "_CHROMA_PERSIST_DIR", chroma_dir)
+    monkeypatch.setattr(embeddings, "_EMBEDDINGS_CACHE_DIR", cache_dir)
+
+    modelo_esperado = object()
+
+    def _fake_loader(*, cache_dir: Path, local_files_only: bool):
+        return modelo_esperado
+
+    monkeypatch.setattr(embeddings, "_carregar_sentence_transformer", _fake_loader)
+
+    modelo = embeddings.inicializar_modelo_embeddings()
+    persist_dir = embeddings._ensure_persist_dir()
+
+    assert modelo is modelo_esperado
+    assert persist_dir == chroma_dir
+    assert chroma_dir.exists()
+    assert cache_dir.exists()
+
+
 def test_configurar_variaveis_cache_embeddings_levanta_erro_cache(monkeypatch):
     def _mkdir_falha(*args, **kwargs):
         raise PermissionError("sem permissão")
