@@ -96,13 +96,14 @@ httpcore==1.0.9
 httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
-    # via
+ # via
     #   gerenciador-de-despesa (pyproject.toml)
     #   chromadb
     #   huggingface-hub
     #   litellm
     #   openai
 huggingface-hub==1.10.2
+humanfriendly==10.0
     # via
     #   sentence-transformers
     #   tokenizers
