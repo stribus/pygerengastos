@@ -171,12 +171,14 @@ def test_sentence_model_thread_safe(monkeypatch, tmp_path):
     import src.classifiers.embeddings as emb_module
 
     sentence_model_falso = object()
-    chamadas: list[bool] = []
+    chamadas_local_files_only: list[bool] = []
+    chamadas_cache_dir: list[Path] = []
     sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
     cache_dir = tmp_path / "hf_cache"
 
     def _fake_sentence_transformer(*, cache_dir: Path, local_files_only: bool):
-        chamadas.append(local_files_only)
+        chamadas_local_files_only.append(local_files_only)
+        chamadas_cache_dir.append(cache_dir)
         time.sleep(SIMULATED_DELAY_SECONDS)
         return sentence_model_falso
 
@@ -191,7 +193,8 @@ def test_sentence_model_thread_safe(monkeypatch, tmp_path):
         resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
 
     assert resultados == [sentence_model_falso] * NUM_CONCURRENT_WORKERS
-    assert chamadas == [True]
+    assert chamadas_local_files_only == [True]
+    assert chamadas_cache_dir == [cache_dir]
 
 
 class TestAtualizarProdutoIdEmbeddings:

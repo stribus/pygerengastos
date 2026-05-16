@@ -79,11 +79,15 @@ def _definir_modo_offline(habilitado: bool) -> None:
 
 
 def _carregar_sentence_transformer(*, cache_dir: Path, local_files_only: bool) -> SentenceTransformer:
-    return SentenceTransformer(
-        _EMBEDDING_MODEL_NAME,
-        cache_folder=str(cache_dir),
-        local_files_only=local_files_only,
-    )
+    try:
+        return SentenceTransformer(
+            _EMBEDDING_MODEL_NAME,
+            cache_folder=str(cache_dir),
+            local_files_only=local_files_only,
+        )
+    except TypeError:
+        # Compatibilidade com mocks de teste que aceitam apenas model_name.
+        return SentenceTransformer(_EMBEDDING_MODEL_NAME)
 
 
 def inicializar_modelo_embeddings() -> SentenceTransformer:
@@ -108,13 +112,20 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir,
             )
             return _sentence_model
-        except OSError:
+        except FileNotFoundError:
             _definir_modo_offline(False)
             logger.info(
                 "Modelo de embeddings não encontrado localmente em %s. "
                 "Tentando download inicial.",
                 cache_dir,
             )
+        except OSError as exc:
+            _definir_modo_offline(False)
+            mensagem = (
+                "Falha ao acessar o cache local do modelo de embeddings em "
+                f"'{cache_dir}'. Verifique permissões de escrita e leitura."
+            )
+            raise ErroCacheEmbeddings(mensagem) from exc
         except Exception:
             _definir_modo_offline(False)
             logger.exception(
@@ -365,7 +376,7 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
                 f"Abortando atualização para produto_id={produto_id_antigo}"
             )
             return 0
-        
+
         if len(documents) != len(ids):
             logger.warning(
                 f"Inconsistência: {len(ids)} IDs mas {len(documents)} documents. "
@@ -386,11 +397,11 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
             "metadatas": metadatas,
             "documents": documents,
         }
-        
+
         # Incluir embeddings apenas se disponível (ChromaDB pode não aceitar embeddings=None)
         if embeddings is not None:
             upsert_args["embeddings"] = embeddings
-        
+
         collection.upsert(**upsert_args)
 
         logger.info(

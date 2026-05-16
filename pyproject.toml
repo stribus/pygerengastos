@@ -19,7 +19,7 @@ classifiers = [
 
 dependencies = [
     "beautifulsoup4>=4.12.2",
-    "chromadb>=1.5.1",
+    "chromadb>=1.5.7",
     "httpx>=0.26.0",
     "litellm>=1.80.8",
     "pandas>=2.2",
