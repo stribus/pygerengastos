@@ -259,7 +259,7 @@ python-dateutil==2.9.0.post0
     # via
     #   kubernetes
     #   pandas
-python-dotenv==1.0.1
+python-dotenv==1.2.2
     # via
     #   gerenciador-de-despesa (pyproject.toml)
     #   litellm
