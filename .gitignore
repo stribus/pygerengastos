@@ -220,3 +220,5 @@ e2e
 #project specific
 src/data/chroma/
 data/*.db
+cache/huggingface/
+data/chroma/
