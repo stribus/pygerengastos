@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.classifiers.embeddings import (
+    ErroCacheEmbeddings,
+    ErroDownloadEmbeddings,
+    inicializar_modelo_embeddings,
+    obter_diretorio_cache_embeddings,
+)
 from src.database import inicializar_banco, seed_categorias_csv
 from src.ui import render_pagina_analise, render_pagina_importacao, render_pagina_relatorios
 from src.ui.home import render_home
@@ -25,6 +31,13 @@ PAGINAS = {
 	"Relatórios": render_pagina_relatorios,
 }
 
+
+@st.cache_resource(show_spinner=False)
+def _inicializar_recursos_embeddings() -> bool:
+	inicializar_modelo_embeddings()
+	return True
+
+
 def main() -> None:
 	try:
 		logger.info("Iniciando aplicação Gerenciador de Gastos")
@@ -35,6 +48,31 @@ def main() -> None:
 			logger.info("Iniciando carregamento de modelos LLM em background")
 			iniciar_carregamento_background()
 			st.session_state["modelos_llm_carregamento_iniciado"] = True
+
+		if "embeddings_cache_inicializado" not in st.session_state:
+			try:
+				_inicializar_recursos_embeddings()
+				st.session_state["embeddings_cache_inicializado"] = True
+				logger.info("Modelo de embeddings inicializado com cache local persistente")
+			except ErroCacheEmbeddings as exc:
+				logger.exception("Erro de acesso ao diretório de cache de embeddings: %s", exc)
+				st.error(
+					"Erro ao inicializar cache de embeddings. "
+					f"Verifique permissões de escrita em '{obter_diretorio_cache_embeddings()}'."
+				)
+			except ErroDownloadEmbeddings as exc:
+				logger.warning("Modelo de embeddings indisponível no cache local: %s", exc)
+				st.warning(
+					"Modelo de embeddings não encontrado no cache local. "
+					"Conecte à internet na primeira execução para baixar o modelo em "
+					f"'{obter_diretorio_cache_embeddings()}'."
+				)
+			except Exception as exc:
+				logger.exception("Erro ao inicializar cache de embeddings: %s", exc)
+				st.error(
+					"Erro inesperado ao inicializar cache de embeddings. "
+					f"Verifique configuração e acesso ao diretório '{obter_diretorio_cache_embeddings()}'."
+				)
 
 		# Inicialização do banco e categorias
 		if "banco_inicializado" not in st.session_state:

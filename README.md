@@ -126,6 +126,20 @@ Para acelerar a identificação de produtos, o sistema gera embeddings SentenceT
 
 As dependências `chromadb>=1.5.1` e `sentence-transformers>=5.2.3` cuidam dessa camada. O cliente local do Chroma usa persistência em `data/chroma`, então garanta que esse diretório esteja gravável e que o modelo `all-MiniLM-L6-v2` possa ser baixado da Hugging Face.
 
+### Cache offline de embeddings (Hugging Face)
+
+O app agora define automaticamente cache persistente para embeddings em `cache/huggingface`, configurando:
+
+- `HF_HOME`
+- `TRANSFORMERS_CACHE`
+- `SENTENCE_TRANSFORMERS_HOME`
+
+Fluxo recomendado:
+
+1. **Primeira execução (com internet):** o modelo `all-MiniLM-L6-v2` é baixado e salvo em `cache/huggingface`.
+2. **Execuções seguintes:** o app tenta carregar o modelo **somente do cache local** e ativa modo offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) quando o cache já existe.
+3. **Se o cache não existir e não houver internet:** a UI mostra aviso claro para conectar na primeira execução.
+
 ## Regenerando o índice semântico
 
 O índice de embeddings é atualizado automaticamente sempre que um item é persistido ou reclassificado via `salvar_nota()` e `registrar_classificacao_itens()`. Para forçar uma regeneração manual (por exemplo, após limpar `data/chroma`):
