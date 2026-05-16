@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from chromadb import Client
-from chromadb.config import Settings
+import chromadb
+from chromadb.api import ClientAPI
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
@@ -18,9 +18,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CHROMA_PERSIST_DIR = _PROJECT_ROOT / "data" / "chroma"
 _EMBEDDINGS_CACHE_DIR = _PROJECT_ROOT / "cache" / "huggingface"
 
-_chroma_client: Optional[Client] = None
-_embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
-_sentence_model: Optional[SentenceTransformer] = None
+_chroma_client: ClientAPI | None = None
+_embedding_function: embedding_functions.EmbeddingFunction | None = None
+_sentence_model: SentenceTransformer | None = None
+# Double-checked locking mantém o fast path sem lock após a inicialização
+# e evita a race condition de recriar singletons durante sessões simultâneas do Streamlit.
+_client_lock = threading.Lock()
+_embedding_function_lock = threading.Lock()
 _sentence_model_lock = threading.Lock()
 
 
@@ -152,14 +156,17 @@ def _ensure_persist_dir() -> Path:
     return _CHROMA_PERSIST_DIR
 
 
-def _get_client() -> Client:
+def _get_client() -> ClientAPI:
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client
 
-    persist_dir = _ensure_persist_dir()
-    settings = Settings(persist_directory=str(persist_dir), is_persistent=True)
-    _chroma_client = Client(settings=settings)
+    with _client_lock:
+        if _chroma_client is not None:
+            return _chroma_client
+
+        persist_dir = _ensure_persist_dir()
+        _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
     return _chroma_client
 
 
@@ -168,10 +175,14 @@ def _get_embedding_function() -> embedding_functions.EmbeddingFunction:
     if _embedding_function is not None:
         return _embedding_function
 
-    inicializar_modelo_embeddings()
-    _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=_EMBEDDING_MODEL_NAME,
-    )
+    with _embedding_function_lock:
+        if _embedding_function is not None:
+            return _embedding_function
+
+        inicializar_modelo_embeddings()
+        _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=_EMBEDDING_MODEL_NAME,
+        )
     return _embedding_function
 
 
@@ -181,12 +192,10 @@ def _get_sentence_model() -> SentenceTransformer:
 
 def _get_collection():
     client = _get_client()
-    if _CHROMA_COLLECTION_NAME not in {col.name for col in client.list_collections()}:
-        client.create_collection(
-            name=_CHROMA_COLLECTION_NAME,
-            embedding_function=_get_embedding_function(),
-        )
-    return client.get_collection(name=_CHROMA_COLLECTION_NAME)
+    return client.get_or_create_collection(
+        name=_CHROMA_COLLECTION_NAME,
+        embedding_function=_get_embedding_function(),
+    )
 
 
 def gerar_embedding(texto: str) -> List[float]:
