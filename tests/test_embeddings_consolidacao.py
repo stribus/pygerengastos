@@ -131,6 +131,7 @@ def test_embedding_function_thread_safe(monkeypatch):
 
     embedding_function_falsa = object()
     chamadas: list[str] = []
+    chamadas_inicializacao: list[str] = []
     sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
 
     def _fake_embedding_function(*, model_name: str):
@@ -138,10 +139,19 @@ def test_embedding_function_thread_safe(monkeypatch):
         time.sleep(SIMULATED_DELAY_SECONDS)
         return embedding_function_falsa
 
+    def _fake_inicializar_modelo_embeddings():
+        chamadas_inicializacao.append("init")
+        return object()
+
     def _worker():
         sync_barrier.wait()
         return emb_module._get_embedding_function()
 
+    monkeypatch.setattr(
+        emb_module,
+        "inicializar_modelo_embeddings",
+        _fake_inicializar_modelo_embeddings,
+    )
     monkeypatch.setattr(
         emb_module.embedding_functions,
         "SentenceTransformerEmbeddingFunction",
@@ -153,18 +163,22 @@ def test_embedding_function_thread_safe(monkeypatch):
 
     assert resultados == [embedding_function_falsa] * NUM_CONCURRENT_WORKERS
     assert chamadas == ["all-MiniLM-L6-v2"]
+    assert chamadas_inicializacao == ["init"]
 
 
-def test_sentence_model_thread_safe(monkeypatch):
+def test_sentence_model_thread_safe(monkeypatch, tmp_path):
     """Evita múltiplas instâncias do SentenceTransformer em acesso concorrente."""
     import src.classifiers.embeddings as emb_module
 
     sentence_model_falso = object()
-    chamadas: list[str] = []
+    chamadas_local_files_only: list[bool] = []
+    chamadas_cache_dir: list[Path] = []
     sync_barrier = threading.Barrier(NUM_CONCURRENT_WORKERS)
+    cache_dir = tmp_path / "hf_cache"
 
-    def _fake_sentence_transformer(model_name: str):
-        chamadas.append(model_name)
+    def _fake_sentence_transformer(*, cache_dir: Path, local_files_only: bool):
+        chamadas_local_files_only.append(local_files_only)
+        chamadas_cache_dir.append(cache_dir)
         time.sleep(SIMULATED_DELAY_SECONDS)
         return sentence_model_falso
 
@@ -172,13 +186,15 @@ def test_sentence_model_thread_safe(monkeypatch):
         sync_barrier.wait()
         return emb_module._get_sentence_model()
 
-    monkeypatch.setattr(emb_module, "SentenceTransformer", _fake_sentence_transformer)
+    monkeypatch.setattr(emb_module, "_EMBEDDINGS_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(emb_module, "_carregar_sentence_transformer", _fake_sentence_transformer)
 
     with ThreadPoolExecutor(max_workers=NUM_CONCURRENT_WORKERS) as executor:
         resultados = list(executor.map(lambda _: _worker(), range(NUM_CONCURRENT_WORKERS)))
 
     assert resultados == [sentence_model_falso] * NUM_CONCURRENT_WORKERS
-    assert chamadas == ["all-MiniLM-L6-v2"]
+    assert chamadas_local_files_only == [True]
+    assert chamadas_cache_dir == [cache_dir]
 
 
 class TestAtualizarProdutoIdEmbeddings:

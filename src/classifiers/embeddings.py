@@ -112,13 +112,20 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
                 cache_dir,
             )
             return _sentence_model
-        except OSError:
+        except FileNotFoundError:
             _definir_modo_offline(False)
             logger.info(
                 "Modelo de embeddings não encontrado localmente em %s. "
                 "Tentando download inicial.",
                 cache_dir,
             )
+        except OSError as exc:
+            _definir_modo_offline(False)
+            mensagem = (
+                "Falha ao acessar o cache local do modelo de embeddings em "
+                f"'{cache_dir}'. Verifique permissões de escrita e leitura."
+            )
+            raise ErroCacheEmbeddings(mensagem) from exc
         except Exception:
             _definir_modo_offline(False)
             logger.exception(

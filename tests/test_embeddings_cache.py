@@ -150,6 +150,11 @@ def test_chroma_persistente_aponta_para_data_na_raiz():
     assert embeddings._CHROMA_PERSIST_DIR == esperado
 
 
+def test_cache_embeddings_aponta_para_cache_na_raiz():
+    esperado = Path(__file__).resolve().parents[1] / "cache" / "huggingface"
+    assert embeddings._EMBEDDINGS_CACHE_DIR == esperado
+
+
 def test_configurar_variaveis_cache_embeddings_levanta_erro_cache(monkeypatch):
     def _mkdir_falha(*args, **kwargs):
         raise PermissionError("sem permissão")
