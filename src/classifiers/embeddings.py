@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from chromadb import Client
-from chromadb.config import Settings
+import chromadb
+from chromadb.api import ClientAPI
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
@@ -12,14 +14,148 @@ from src.logger import setup_logging
 
 _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _CHROMA_COLLECTION_NAME = "produtos"
-_CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[1] / "data" / "chroma"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_CHROMA_PERSIST_DIR = _PROJECT_ROOT / "data" / "chroma"
+_EMBEDDINGS_CACHE_DIR = _PROJECT_ROOT / "cache" / "huggingface"
 
-_chroma_client: Optional[Client] = None
-_embedding_function: Optional[embedding_functions.EmbeddingFunction] = None
-_sentence_model: Optional[SentenceTransformer] = None
+_chroma_client: ClientAPI | None = None
+_embedding_function: embedding_functions.EmbeddingFunction | None = None
+_sentence_model: SentenceTransformer | None = None
+# Double-checked locking mantém o fast path sem lock após a inicialização
+# e evita a race condition de recriar singletons durante sessões simultâneas do Streamlit.
+_client_lock = threading.Lock()
+_embedding_function_lock = threading.Lock()
+_sentence_model_lock = threading.Lock()
 
 
 logger = setup_logging(__name__)
+
+
+class ErroInicializacaoEmbeddings(RuntimeError):
+    """Erro base para inicialização de embeddings."""
+
+
+class ErroCacheEmbeddings(ErroInicializacaoEmbeddings):
+    """Erro ao criar/acessar o cache local de embeddings."""
+
+
+class ErroDownloadEmbeddings(ErroInicializacaoEmbeddings):
+    """Erro ao baixar/carregar o modelo de embeddings."""
+
+
+def obter_diretorio_cache_embeddings() -> Path:
+    """Retorna o diretório persistente usado para cache dos modelos HF."""
+    return _EMBEDDINGS_CACHE_DIR
+
+
+def _configurar_variaveis_cache_embeddings() -> Path:
+    cache_dir = obter_diretorio_cache_embeddings()
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ErroCacheEmbeddings(
+            f"Não foi possível criar/acessar diretório de cache de embeddings em '{cache_dir}'. "
+            "Verifique permissões de escrita."
+        ) from exc
+    # Centraliza explicitamente o cache dos modelos HF no diretório de cache persistente
+    for var in ("HF_HOME", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"):
+        valor_atual = os.environ.get(var)
+        if valor_atual and Path(valor_atual) != cache_dir:
+            logger.warning(
+                "Variável de ambiente %s já estava definida para '%s' e será "
+                "sobrescrita para usar o cache persistente em '%s'.",
+                var,
+                valor_atual,
+                cache_dir,
+            )
+        os.environ[var] = str(cache_dir)
+    return cache_dir
+
+
+def _definir_modo_offline(habilitado: bool) -> None:
+    valor = "1" if habilitado else "0"
+    os.environ["HF_HUB_OFFLINE"] = valor
+    os.environ["TRANSFORMERS_OFFLINE"] = valor
+
+
+def _carregar_sentence_transformer(*, cache_dir: Path, local_files_only: bool) -> SentenceTransformer:
+    return SentenceTransformer(
+        _EMBEDDING_MODEL_NAME,
+        cache_folder=str(cache_dir),
+        local_files_only=local_files_only,
+    )
+
+
+def inicializar_modelo_embeddings() -> SentenceTransformer:
+    """Inicializa o modelo de embeddings usando cache local persistente."""
+    global _sentence_model
+    if _sentence_model is not None:
+        return _sentence_model
+
+    with _sentence_model_lock:
+        if _sentence_model is not None:
+            return _sentence_model
+
+        cache_dir = _configurar_variaveis_cache_embeddings()
+        try:
+            _sentence_model = _carregar_sentence_transformer(
+                cache_dir=cache_dir,
+                local_files_only=True,
+            )
+            _definir_modo_offline(True)
+            logger.info(
+                "Modelo de embeddings carregado do cache local (%s).",
+                cache_dir,
+            )
+            return _sentence_model
+        except FileNotFoundError:
+            _definir_modo_offline(False)
+            logger.info(
+                "Modelo de embeddings não encontrado localmente em %s. "
+                "Tentando download inicial.",
+                cache_dir,
+            )
+        except OSError as exc:
+            _definir_modo_offline(False)
+            mensagem = (
+                "Falha ao acessar o cache local do modelo de embeddings em "
+                f"'{cache_dir}'. Verifique permissões de escrita e leitura."
+            )
+            raise ErroCacheEmbeddings(mensagem) from exc
+        except Exception:
+            _definir_modo_offline(False)
+            logger.exception(
+                "Erro inesperado ao carregar modelo de embeddings do cache local em %s. "
+                "Tentando download inicial.",
+                cache_dir,
+            )
+
+        try:
+            _sentence_model = _carregar_sentence_transformer(
+                cache_dir=cache_dir,
+                local_files_only=False,
+            )
+            _definir_modo_offline(True)
+            logger.info(
+                "Modelo de embeddings inicializado e armazenado em cache (%s).",
+                cache_dir,
+            )
+            return _sentence_model
+        except Exception as exc:
+            if isinstance(exc, PermissionError):
+                mensagem = (
+                    "Falha ao inicializar o modelo de embeddings. "
+                    "Verifique as permissões de escrita e acesso ao diretório de cache em "
+                    f"'{cache_dir}'."
+                )
+                raise ErroCacheEmbeddings(mensagem) from exc
+
+            mensagem = (
+                "Falha ao inicializar o modelo de embeddings. "
+                "Verifique sua conexão com a internet na primeira execução para permitir o "
+                "download do modelo de embeddings."
+            )
+            raise ErroDownloadEmbeddings(mensagem) from exc
 
 
 def _ensure_persist_dir() -> Path:
@@ -27,14 +163,17 @@ def _ensure_persist_dir() -> Path:
     return _CHROMA_PERSIST_DIR
 
 
-def _get_client() -> Client:
+def _get_client() -> ClientAPI:
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client
 
-    persist_dir = _ensure_persist_dir()
-    settings = Settings(persist_directory=str(persist_dir), is_persistent=True)
-    _chroma_client = Client(settings=settings)
+    with _client_lock:
+        if _chroma_client is not None:
+            return _chroma_client
+
+        persist_dir = _ensure_persist_dir()
+        _chroma_client = chromadb.PersistentClient(path=str(persist_dir))
     return _chroma_client
 
 
@@ -43,29 +182,27 @@ def _get_embedding_function() -> embedding_functions.EmbeddingFunction:
     if _embedding_function is not None:
         return _embedding_function
 
-    _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=_EMBEDDING_MODEL_NAME,
-    )
+    with _embedding_function_lock:
+        if _embedding_function is not None:
+            return _embedding_function
+
+        inicializar_modelo_embeddings()
+        _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=_EMBEDDING_MODEL_NAME,
+        )
     return _embedding_function
 
 
 def _get_sentence_model() -> SentenceTransformer:
-    global _sentence_model
-    if _sentence_model is not None:
-        return _sentence_model
-
-    _sentence_model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
-    return _sentence_model
+    return inicializar_modelo_embeddings()
 
 
 def _get_collection():
     client = _get_client()
-    if _CHROMA_COLLECTION_NAME not in {col.name for col in client.list_collections()}:
-        client.create_collection(
-            name=_CHROMA_COLLECTION_NAME,
-            embedding_function=_get_embedding_function(),
-        )
-    return client.get_collection(name=_CHROMA_COLLECTION_NAME)
+    return client.get_or_create_collection(
+        name=_CHROMA_COLLECTION_NAME,
+        embedding_function=_get_embedding_function(),
+    )
 
 
 def gerar_embedding(texto: str) -> List[float]:
@@ -235,7 +372,7 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
                 f"Abortando atualização para produto_id={produto_id_antigo}"
             )
             return 0
-        
+
         if len(documents) != len(ids):
             logger.warning(
                 f"Inconsistência: {len(ids)} IDs mas {len(documents)} documents. "
@@ -256,11 +393,11 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
             "metadatas": metadatas,
             "documents": documents,
         }
-        
+
         # Incluir embeddings apenas se disponível (ChromaDB pode não aceitar embeddings=None)
         if embeddings is not None:
             upsert_args["embeddings"] = embeddings
-        
+
         collection.upsert(**upsert_args)
 
         logger.info(

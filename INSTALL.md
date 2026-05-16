@@ -62,7 +62,22 @@ Use o modo headless: `.\start.ps1 -Headless`
 Reinstale as dependências:
 ```powershell
 .\.venv\Scripts\Activate.ps1
-uv pip install -r requirements.txt
+uv pip sync requirements.txt
+```
+
+### Atualização de dependências
+
+- Edite apenas `pyproject.toml` ao adicionar/remover dependências de alto nível.
+- Não altere `requirements.txt` manualmente; regenere-o com:
+
+```powershell
+uv pip compile pyproject.toml --all-extras -o requirements.txt
+```
+
+- Se precisar instalar o arquivo compilado sem `uv`, use:
+
+```powershell
+pip install -r requirements.txt
 ```
 
 ## Uso Básico
