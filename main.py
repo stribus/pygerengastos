@@ -54,21 +54,21 @@ def main() -> None:
 				_inicializar_recursos_embeddings()
 				st.session_state["embeddings_cache_inicializado"] = True
 				logger.info("Modelo de embeddings inicializado com cache local persistente")
-			except ErroCacheEmbeddings as exc:
-				logger.exception("Erro de acesso ao diretório de cache de embeddings: %s", exc)
+			except ErroCacheEmbeddings:
+				logger.exception("Erro de acesso ao diretório de cache de embeddings")
 				st.error(
 					"Erro ao inicializar cache de embeddings. "
 					f"Verifique permissões de escrita em '{obter_diretorio_cache_embeddings()}'."
 				)
-			except ErroDownloadEmbeddings as exc:
+			except ErroDownloadEmbeddings:
 				logger.warning("Modelo de embeddings indisponível no cache local: %s", exc)
 				st.warning(
 					"Modelo de embeddings não encontrado no cache local. "
 					"Conecte à internet na primeira execução para baixar o modelo em "
 					f"'{obter_diretorio_cache_embeddings()}'."
 				)
-			except Exception as exc:
-				logger.exception("Erro ao inicializar cache de embeddings: %s", exc)
+			except Exception:
+				logger.exception("Erro ao inicializar cache de embeddings")
 				st.error(
 					"Erro inesperado ao inicializar cache de embeddings. "
 					f"Verifique configuração e acesso ao diretório '{obter_diretorio_cache_embeddings()}'."
