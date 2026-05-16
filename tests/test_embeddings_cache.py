@@ -148,8 +148,6 @@ def test_inicializar_modelo_embeddings_erro_permissao_no_download(tmp_path, monk
 def test_chroma_persistente_aponta_para_data_na_raiz():
     esperado = Path(__file__).resolve().parents[1] / "data" / "chroma"
     assert embeddings._CHROMA_PERSIST_DIR == esperado
-    esperado_cache = Path(__file__).resolve().parents[1] / "cache" / "huggingface"
-    assert embeddings._EMBEDDINGS_CACHE_DIR == esperado_cache
 
 
 def test_cache_embeddings_aponta_para_cache_na_raiz():
