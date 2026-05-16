@@ -79,15 +79,11 @@ def _definir_modo_offline(habilitado: bool) -> None:
 
 
 def _carregar_sentence_transformer(*, cache_dir: Path, local_files_only: bool) -> SentenceTransformer:
-    try:
-        return SentenceTransformer(
-            _EMBEDDING_MODEL_NAME,
-            cache_folder=str(cache_dir),
-            local_files_only=local_files_only,
-        )
-    except TypeError:
-        # Compatibilidade com mocks de teste que aceitam apenas model_name.
-        return SentenceTransformer(_EMBEDDING_MODEL_NAME)
+    return SentenceTransformer(
+        _EMBEDDING_MODEL_NAME,
+        cache_folder=str(cache_dir),
+        local_files_only=local_files_only,
+    )
 
 
 def inicializar_modelo_embeddings() -> SentenceTransformer:

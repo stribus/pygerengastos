@@ -60,7 +60,7 @@ def main() -> None:
 					"Erro ao inicializar cache de embeddings. "
 					f"Verifique permissões de escrita em '{obter_diretorio_cache_embeddings()}'."
 				)
-			except ErroDownloadEmbeddings:
+			except ErroDownloadEmbeddings as exc:
 				logger.warning("Modelo de embeddings indisponível no cache local: %s", exc)
 				st.warning(
 					"Modelo de embeddings não encontrado no cache local. "
