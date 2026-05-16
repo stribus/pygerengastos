@@ -253,6 +253,7 @@ pypika==0.51.1
     # via chromadb
 pyproject-hooks==1.2.0
     # via build
+
 pyreadline3==3.5.4
 pytest==9.0.3
     # via gerenciador-de-despesa (pyproject.toml)
@@ -260,7 +261,7 @@ python-dateutil==2.9.0.post0
     # via
     #   kubernetes
     #   pandas
-python-dotenv==1.0.1
+python-dotenv==1.2.2
     # via
     #   gerenciador-de-despesa (pyproject.toml)
     #   litellm

@@ -22,11 +22,11 @@ dependencies = [
     "beautifulsoup4>=4.12.2",
     "chromadb>=1.5.7",
     "httpx>=0.26.0",
-    "litellm>=1.83.0",
+    "litellm>=1.83.7",
     "orjson>=3.11.6",
     "pandas>=2.2",
     "pygments>=2.20.0",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2.2",
     "rapidfuzz>=3.14.3",
     "requests>=2.33.0",
     "sentence-transformers==5.4.0",
@@ -80,3 +80,4 @@ python_functions = ["test_*"]
 dev = [
     "pytest>=9.0.3",
 ]
+
