@@ -16,7 +16,11 @@ from pathlib import Path
 # Permite execução a partir da raiz do projeto sem necessidade de instalar o pacote
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.classifiers.embeddings import garantir_cache_embeddings
+from src.classifiers.embeddings import (
+    ErroCacheEmbeddings,
+    ErroDownloadEmbeddings,
+    garantir_cache_embeddings,
+)
 
 
 def main() -> None:
@@ -24,8 +28,11 @@ def main() -> None:
         cache_dir = garantir_cache_embeddings()
         print(f"Cache de embeddings pronto em: {cache_dir}")
         sys.exit(0)
-    except Exception as exc:  # noqa: BLE001
-        print(f"ERRO: Falha ao garantir cache de embeddings: {exc}", file=sys.stderr)
+    except ErroCacheEmbeddings as exc:
+        print(f"ERRO: Problema ao acessar o diretório de cache: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except ErroDownloadEmbeddings as exc:
+        print(f"ERRO: Falha ao baixar o modelo de embeddings: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

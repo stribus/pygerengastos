@@ -68,14 +68,17 @@ def garantir_cache_embeddings() -> Path:
         ErroDownloadEmbeddings: Se o download do modelo falhar.
     """
     cache_dir = obter_diretorio_cache_embeddings()
-    if not cache_dir.exists() or not any(cache_dir.iterdir()):
+    cache_vazio = not cache_dir.exists() or not any(cache_dir.iterdir())
+    if cache_vazio:
         logger.info(
             "Cache de embeddings ausente em '%s'. Iniciando download do modelo '%s'...",
             cache_dir,
             _EMBEDDING_MODEL_NAME,
         )
-    inicializar_modelo_embeddings()
-    logger.info("Cache de embeddings pronto em '%s'.", cache_dir)
+        inicializar_modelo_embeddings()
+        logger.info("Cache de embeddings populado em '%s'.", cache_dir)
+    else:
+        logger.info("Cache de embeddings já presente em '%s'.", cache_dir)
     return cache_dir
 
 

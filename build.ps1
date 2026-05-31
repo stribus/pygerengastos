@@ -50,7 +50,8 @@ foreach ($item in $itemsToCopy) {
 		if ($item -eq "cache/huggingface") {
 			Write-Step "Cache de embeddings ausente — iniciando pré-download do modelo"
 			$ensureScript = Join-Path $repoRoot "scripts\ensure_embeddings_cache.py"
-			& "python" $ensureScript
+			$scriptOutput = & "python" $ensureScript 2>&1
+			Write-Host $scriptOutput
 			if ($LASTEXITCODE -ne 0) {
 				Write-Warning "Falha ao baixar o modelo de embeddings. O pacote será gerado sem o cache embutido e o modelo será baixado na primeira execução."
 				continue
