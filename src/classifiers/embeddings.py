@@ -170,7 +170,7 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
         except PermissionError as exc:
             mensagem = (
                 "Falha ao gravar o modelo de embeddings em "
-                f"'{cache_dir}'. Verifique permissões de escrita."
+                f"'{cache_dir}'. Verifique as permissões de escrita."
             )
             raise ErroCacheEmbeddings(mensagem) from exc
         except Exception as exc:
