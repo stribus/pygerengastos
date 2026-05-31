@@ -33,7 +33,7 @@ thinking = false
 nome = "nvidia_nim/deepseek-ai/deepseek-v4-flash"
 nome_amigavel = "deepseek-v4-flash (NVIDIA)"
 api_key_env = "NVIDIA_API_KEY"
-max_tokens = 10384
+max_tokens = 16384
 max_itens = 20
 timeout = 45.0
 [modelos.extra_body.chat_template_kwargs]
