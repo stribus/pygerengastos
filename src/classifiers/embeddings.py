@@ -10,6 +10,11 @@ from chromadb.api import ClientAPI
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
 
+try:
+    from huggingface_hub.errors import LocalEntryNotFoundError
+except ImportError:
+    LocalEntryNotFoundError = type("LocalEntryNotFoundError", (Exception,), {})
+
 from src.logger import setup_logging
 
 _EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -127,8 +132,6 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
         except Exception as exc:
             # Qualquer outro erro (FileNotFoundError, LocalEntryNotFoundError, OSError, etc)
             # = modelo não está em cache, mas pode estar disponível para download
-            from huggingface_hub.errors import LocalEntryNotFoundError
-
             erro_tipo = type(exc).__name__
             is_local_entry_not_found = isinstance(exc, LocalEntryNotFoundError)
             is_file_not_found = isinstance(exc, FileNotFoundError)
