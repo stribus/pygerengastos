@@ -9,24 +9,54 @@ max_tokens = 8000
 max_itens = 50
 timeout = 30.0
 
-[[modelos]]
-nome = "nvidia_nim/meta/llama3-70b-instruct"
-nome_amigavel = "LLaMA 3 70B (NVIDIA)"
-api_key_env = "NVIDIA_API_KEY"
-max_tokens = 4096
-max_itens = 20
-timeout = 45.0
+
+#[[modelos]]
+#nome = "nvidia_nim/meta/llama3-70b-instruct"
+#nome_amigavel = "LLaMA 3 70B (NVIDIA)"
+#api_key_env = "NVIDIA_API_KEY"
+#max_tokens = 4096
+#max_itens = 20
+#timeout = 45.0
+
 
 [[modelos]]
-nome = "nvidia_nim/moonshotai/kimi-k2.5"
-nome_amigavel = "Kimi K2.5 (Moonshot AI)"
+nome = "nvidia_nim/deepseek-ai/deepseek-v4-pro"
+nome_amigavel = "deepseek-v4-PRO (NVIDIA)"
+api_key_env = "NVIDIA_API_KEY"
+max_tokens = 16384
+max_itens = 50
+timeout = 45.0
+[modelos.extra_body.chat_template_kwargs]
+thinking = false
+
+[[modelos]]
+nome = "nvidia_nim/deepseek-ai/deepseek-v4-flash"
+nome_amigavel = "deepseek-v4-flash (NVIDIA)"
+api_key_env = "NVIDIA_API_KEY"
+max_tokens = 16384
+max_itens = 20
+timeout = 45.0
+[modelos.extra_body.chat_template_kwargs]
+thinking = false
+
+[[modelos]]
+nome = "nvidia_nim/moonshotai/kimi-k2.6"
+nome_amigavel = "Kimi K2.6 (Moonshot AI)"
 api_key_env = "NVIDIA_API_KEY"
 max_tokens = 8192
 max_itens = 25
 timeout = 45.0
-# Configuração específica do Kimi K2.5: desabilita modo thinking
+# Configuração específica do Kimi K2.6: desabilita modo thinking
 [modelos.extra_body.chat_template_kwargs]
 thinking = false
+
+[[modelos]]
+nome = "nvidia_nim/stepfun-ai/step-3.7-flash"
+nome_amigavel = "step-3.7-flash (NVIDIA)"
+api_key_env = "NVIDIA_API_KEY"
+max_tokens = 16384
+max_itens = 40
+timeout = 45.0
 
 [[modelos]]
 nome = "openai/gpt-4o"
