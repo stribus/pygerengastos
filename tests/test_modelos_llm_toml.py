@@ -8,6 +8,17 @@ especificamente para a configuração de extra_body nos modelos.
 import tomllib
 import pytest
 
+MODELOS_COM_CHAT_TEMPLATE_KWARGS = {
+    "nvidia_nim/deepseek-ai/deepseek-v4-pro",
+    "nvidia_nim/deepseek-ai/deepseek-v4-flash",
+    "nvidia_nim/moonshotai/kimi-k2.6",
+}
+
+MODELOS_NVIDIA_NIM_SEM_CHAT_TEMPLATE = {"nvidia_nim/stepfun-ai/step-3.7-flash"}
+MODELOS_NVIDIA_NIM_ESPERADOS = (
+    MODELOS_COM_CHAT_TEMPLATE_KWARGS | MODELOS_NVIDIA_NIM_SEM_CHAT_TEMPLATE
+)
+
 
 def test_sintaxe_subtabela_vs_inline_table():
     """
@@ -165,31 +176,21 @@ def test_arquivo_modelos_llm_atual():
                 f"Modelo {idx}: extra_body deve ser um dicionário"
 
     # Validar presença dos novos modelos NVIDIA NIM configurados no PR
+    # Indexa por nome para facilitar validação de propriedades específicas por modelo.
     modelos_por_nome = {modelo["nome"]: modelo for modelo in data["modelos"]}
-    novos_modelos_nvidia = {
-        "nvidia_nim/deepseek-ai/deepseek-v4-pro",
-        "nvidia_nim/deepseek-ai/deepseek-v4-flash",
-        "nvidia_nim/moonshotai/kimi-k2.6",
-        "nvidia_nim/stepfun-ai/step-3.7-flash",
-    }
-    assert novos_modelos_nvidia.issubset(modelos_por_nome.keys())
+    assert MODELOS_NVIDIA_NIM_ESPERADOS.issubset(modelos_por_nome.keys())
 
     # Modelos que usam chat_template_kwargs devem manter thinking=false
-    assert (
-        modelos_por_nome["nvidia_nim/deepseek-ai/deepseek-v4-pro"]["extra_body"]
-        ["chat_template_kwargs"]["thinking"]
-        is False
-    )
-    assert (
-        modelos_por_nome["nvidia_nim/deepseek-ai/deepseek-v4-flash"]["extra_body"]
-        ["chat_template_kwargs"]["thinking"]
-        is False
-    )
-    assert (
-        modelos_por_nome["nvidia_nim/moonshotai/kimi-k2.6"]["extra_body"]
-        ["chat_template_kwargs"]["thinking"]
-        is False
-    )
+    for nome_modelo in MODELOS_COM_CHAT_TEMPLATE_KWARGS:
+        extra_body = modelos_por_nome[nome_modelo].get("extra_body")
+        assert isinstance(extra_body, dict), f"{nome_modelo}: extra_body ausente ou inválido"
+        chat_kwargs = extra_body.get("chat_template_kwargs")
+        assert isinstance(chat_kwargs, dict), (
+            f"{nome_modelo}: chat_template_kwargs ausente ou inválido"
+        )
+        assert chat_kwargs.get("thinking") is False, (
+            f"{nome_modelo}: thinking deve ser False"
+        )
 
 
 def test_sintaxe_subtabela_preserva_ordem():
