@@ -37,6 +37,7 @@ $itemsToCopy = @(
 	"config/modelos_llm.toml",
 	"src",
 	"data",
+	"cache",
 	"debug_product_update.py",
 	"verify_logging.py",
 	"verify_seeding.py",
