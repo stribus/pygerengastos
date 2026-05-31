@@ -47,6 +47,9 @@ $itemsToCopy = @(
 foreach ($item in $itemsToCopy) {
 	$source = Join-Path $repoRoot $item
 	if (-not (Test-Path $source)) {
+		if ($item -eq "cache/huggingface") {
+			Write-Warning "Diretório 'cache/huggingface' não encontrado. O modelo de embeddings NÃO será embutido no pacote e será baixado automaticamente na primeira execução. Execute a aplicação localmente uma vez antes de empacotar para pré-cachear o modelo."
+		}
 		continue
 	}
 	$destination = Join-Path $packagePath $item
