@@ -88,7 +88,13 @@ def _carregar_sentence_transformer(*, cache_dir: Path, local_files_only: bool) -
 
 
 def inicializar_modelo_embeddings() -> SentenceTransformer:
-    """Inicializa o modelo de embeddings usando cache local persistente."""
+    """Inicializa o modelo de embeddings com fallback automático para download.
+
+    Estratégia:
+    1. Tenta carregar do cache local (rápido, offline)
+    2. Se falhar e não for erro de permissão, tenta download automático
+    3. Se download também falhar, levanta erro apropriado
+    """
     global _sentence_model
     if _sentence_model is not None:
         return _sentence_model
@@ -98,6 +104,8 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
             return _sentence_model
 
         cache_dir = _configurar_variaveis_cache_embeddings()
+
+        # ===== Tentativa 1: Carregar do cache local =====
         try:
             _sentence_model = _carregar_sentence_transformer(
                 cache_dir=cache_dir,
@@ -105,57 +113,71 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
             )
             _definir_modo_offline(True)
             logger.info(
-                "Modelo de embeddings carregado do cache local (%s).",
+                "Modelo de embeddings carregado do cache local em %s.",
                 cache_dir,
             )
             return _sentence_model
-        except FileNotFoundError:
-            _definir_modo_offline(False)
-            logger.info(
-                "Modelo de embeddings não encontrado localmente em %s. "
-                "Tentando download inicial.",
-                cache_dir,
-            )
-        except OSError as exc:
-            _definir_modo_offline(False)
+        except PermissionError as exc:
+            # Erro de permissão = problema real que não resolve com download
             mensagem = (
-                "Falha ao acessar o cache local do modelo de embeddings em "
+                "Falha ao acessar o diretório de cache de embeddings em "
                 f"'{cache_dir}'. Verifique permissões de escrita e leitura."
             )
             raise ErroCacheEmbeddings(mensagem) from exc
-        except Exception:
-            _definir_modo_offline(False)
-            logger.exception(
-                "Erro inesperado ao carregar modelo de embeddings do cache local em %s. "
-                "Tentando download inicial.",
-                cache_dir,
-            )
+        except Exception as exc:
+            # Qualquer outro erro (FileNotFoundError, LocalEntryNotFoundError, OSError, etc)
+            # = modelo não está em cache, mas pode estar disponível para download
+            from huggingface_hub.errors import LocalEntryNotFoundError
 
-        # Fallback para download inicial quando o cache local não tem o modelo.
+            erro_tipo = type(exc).__name__
+            is_local_entry_not_found = isinstance(exc, LocalEntryNotFoundError)
+            is_file_not_found = isinstance(exc, FileNotFoundError)
+
+            if is_local_entry_not_found or is_file_not_found:
+                logger.info(
+                    "Modelo '%s' não encontrado no cache local em %s. "
+                    "Tentando download automático...",
+                    _EMBEDDING_MODEL_NAME,
+                    cache_dir,
+                )
+            else:
+                logger.warning(
+                    "Erro ao acessar cache local do modelo em %s (%s: %s). "
+                    "Tentando download automático...",
+                    cache_dir,
+                    erro_tipo,
+                    str(exc),
+                )
+
+        # ===== Tentativa 2: Download automático =====
+        _definir_modo_offline(False)
         try:
+            logger.info(
+                "Iniciando download do modelo '%s' de Hugging Face...",
+                _EMBEDDING_MODEL_NAME,
+            )
             _sentence_model = _carregar_sentence_transformer(
                 cache_dir=cache_dir,
                 local_files_only=False,
             )
             _definir_modo_offline(True)
             logger.info(
-                "Modelo de embeddings inicializado e armazenado em cache (%s).",
+                "Modelo '%s' baixado e armazenado em cache em %s.",
+                _EMBEDDING_MODEL_NAME,
                 cache_dir,
             )
             return _sentence_model
-        except Exception as exc:
-            if isinstance(exc, PermissionError):
-                mensagem = (
-                    "Falha ao inicializar o modelo de embeddings. "
-                    "Verifique as permissões de escrita e acesso ao diretório de cache em "
-                    f"'{cache_dir}'."
-                )
-                raise ErroCacheEmbeddings(mensagem) from exc
-
+        except PermissionError as exc:
             mensagem = (
-                "Falha ao inicializar o modelo de embeddings. "
-                "Verifique sua conexão com a internet na primeira execução para permitir o "
-                "download do modelo de embeddings."
+                "Falha ao gravar o modelo de embeddings em "
+                f"'{cache_dir}'. Verifique as permissões de escrita."
+            )
+            raise ErroCacheEmbeddings(mensagem) from exc
+        except Exception as exc:
+            mensagem = (
+                "Falha ao baixar o modelo de embeddings de Hugging Face. "
+                "Verifique sua conexão com a internet na primeira execução. "
+                f"Erro: {type(exc).__name__}: {exc}"
             )
             raise ErroDownloadEmbeddings(mensagem) from exc
 
