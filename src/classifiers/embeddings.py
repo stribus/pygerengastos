@@ -54,6 +54,31 @@ def obter_diretorio_cache_embeddings() -> Path:
     return _EMBEDDINGS_CACHE_DIR
 
 
+def garantir_cache_embeddings() -> Path:
+    """Garante que o modelo de embeddings está em cache local, baixando-o se necessário.
+
+    Útil para ser chamado antes de empacotar a aplicação, assegurando que o
+    diretório ``cache/huggingface`` esteja populado e possa ser incluído no pacote.
+
+    Returns:
+        Caminho do diretório de cache com o modelo baixado.
+
+    Raises:
+        ErroCacheEmbeddings: Se não for possível criar/acessar o diretório de cache.
+        ErroDownloadEmbeddings: Se o download do modelo falhar.
+    """
+    cache_dir = obter_diretorio_cache_embeddings()
+    if not cache_dir.exists() or not any(cache_dir.iterdir()):
+        logger.info(
+            "Cache de embeddings ausente em '%s'. Iniciando download do modelo '%s'...",
+            cache_dir,
+            _EMBEDDING_MODEL_NAME,
+        )
+    inicializar_modelo_embeddings()
+    logger.info("Cache de embeddings pronto em '%s'.", cache_dir)
+    return cache_dir
+
+
 def _configurar_variaveis_cache_embeddings() -> Path:
     cache_dir = obter_diretorio_cache_embeddings()
     try:

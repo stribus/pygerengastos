@@ -48,9 +48,21 @@ foreach ($item in $itemsToCopy) {
 	$source = Join-Path $repoRoot $item
 	if (-not (Test-Path $source)) {
 		if ($item -eq "cache/huggingface") {
-			Write-Warning "Diretório 'cache/huggingface' não encontrado. O modelo de embeddings NÃO será embutido no pacote e será baixado automaticamente na primeira execução. Execute a aplicação localmente uma vez antes de empacotar para pré-cachear o modelo."
+			Write-Step "Cache de embeddings ausente — iniciando pré-download do modelo"
+			$ensureScript = Join-Path $repoRoot "scripts\ensure_embeddings_cache.py"
+			& "python" $ensureScript
+			if ($LASTEXITCODE -ne 0) {
+				Write-Warning "Falha ao baixar o modelo de embeddings. O pacote será gerado sem o cache embutido e o modelo será baixado na primeira execução."
+				continue
+			}
+			# Após download bem-sucedido, revalida o caminho antes de copiar
+			if (-not (Test-Path $source)) {
+				Write-Warning "Download concluído mas o diretório '$source' ainda não foi encontrado. Verifique o caminho de cache."
+				continue
+			}
+		} else {
+			continue
 		}
-		continue
 	}
 	$destination = Join-Path $packagePath $item
 	$null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
