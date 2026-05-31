@@ -164,6 +164,33 @@ def test_arquivo_modelos_llm_atual():
             assert isinstance(modelo["extra_body"], dict), \
                 f"Modelo {idx}: extra_body deve ser um dicionário"
 
+    # Validar presença dos novos modelos NVIDIA NIM configurados no PR
+    modelos_por_nome = {modelo["nome"]: modelo for modelo in data["modelos"]}
+    novos_modelos_nvidia = {
+        "nvidia_nim/deepseek-ai/deepseek-v4-pro",
+        "nvidia_nim/deepseek-ai/deepseek-v4-flash",
+        "nvidia_nim/moonshotai/kimi-k2.6",
+        "nvidia_nim/stepfun-ai/step-3.7-flash",
+    }
+    assert novos_modelos_nvidia.issubset(modelos_por_nome.keys())
+
+    # Modelos que usam chat_template_kwargs devem manter thinking=false
+    assert (
+        modelos_por_nome["nvidia_nim/deepseek-ai/deepseek-v4-pro"]["extra_body"]
+        ["chat_template_kwargs"]["thinking"]
+        is False
+    )
+    assert (
+        modelos_por_nome["nvidia_nim/deepseek-ai/deepseek-v4-flash"]["extra_body"]
+        ["chat_template_kwargs"]["thinking"]
+        is False
+    )
+    assert (
+        modelos_por_nome["nvidia_nim/moonshotai/kimi-k2.6"]["extra_body"]
+        ["chat_template_kwargs"]["thinking"]
+        is False
+    )
+
 
 def test_sintaxe_subtabela_preserva_ordem():
     """
