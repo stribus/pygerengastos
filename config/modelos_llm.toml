@@ -20,7 +20,7 @@ timeout = 30.0
 
 
 [[modelos]]
-nome = "deepseek-ai/deepseek-v4-pro"
+nome = "nvidia_nim/deepseek-ai/deepseek-v4-pro"
 nome_amigavel = "deepseek-v4-PRO (NVIDIA)"
 api_key_env = "NVIDIA_API_KEY"
 max_tokens = 16384
@@ -30,7 +30,7 @@ timeout = 45.0
 thinking = false
 
 [[modelos]]
-nome = "deepseek-ai/deepseek-v4-flash"
+nome = "nvidia_nim/deepseek-ai/deepseek-v4-flash"
 nome_amigavel = "deepseek-v4-flash (NVIDIA)"
 api_key_env = "NVIDIA_API_KEY"
 max_tokens = 10384
@@ -51,7 +51,7 @@ timeout = 45.0
 thinking = false
 
 [[modelos]]
-nome = "stepfun-ai/step-3.7-flash"
+nome = "nvidia_nim/stepfun-ai/step-3.7-flash"
 nome_amigavel = "step-3.7-flash (NVIDIA)"
 api_key_env = "NVIDIA_API_KEY"
 max_tokens = 16384
