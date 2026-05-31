@@ -176,7 +176,7 @@ def inicializar_modelo_embeddings() -> SentenceTransformer:
         except Exception as exc:
             mensagem = (
                 "Falha ao baixar o modelo de embeddings de Hugging Face. "
-                "Verifique sua conexão com a internet e tente novamente. "
+                "Verifique sua conexão com a internet na primeira execução. "
                 f"Erro: {type(exc).__name__}: {exc}"
             )
             raise ErroDownloadEmbeddings(mensagem) from exc
