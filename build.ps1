@@ -37,6 +37,7 @@ $itemsToCopy = @(
 	"config/modelos_llm.toml",
 	"src",
 	"data",
+	"cache/huggingface",
 	"debug_product_update.py",
 	"verify_logging.py",
 	"verify_seeding.py",
@@ -46,7 +47,23 @@ $itemsToCopy = @(
 foreach ($item in $itemsToCopy) {
 	$source = Join-Path $repoRoot $item
 	if (-not (Test-Path $source)) {
-		continue
+		if ($item -eq "cache/huggingface") {
+			Write-Step "Cache de embeddings ausente — iniciando pré-download do modelo"
+			$ensureScript = Join-Path $repoRoot "scripts\ensure_embeddings_cache.py"
+			$scriptOutput = & "python" $ensureScript 2>&1
+			Write-Host $scriptOutput
+			if ($LASTEXITCODE -ne 0) {
+				Write-Warning "Falha ao baixar o modelo de embeddings. O pacote será gerado sem o cache embutido e o modelo será baixado na primeira execução."
+				continue
+			}
+			# Após download bem-sucedido, revalida o caminho antes de copiar
+			if (-not (Test-Path $source)) {
+				Write-Warning "Download concluído mas o diretório '$source' ainda não foi encontrado. Verifique o caminho de cache."
+				continue
+			}
+		} else {
+			continue
+		}
 	}
 	$destination = Join-Path $packagePath $item
 	$null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force

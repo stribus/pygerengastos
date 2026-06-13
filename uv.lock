@@ -581,7 +581,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.2" },
     { name = "chromadb", specifier = ">=1.5.7" },
     { name = "httpx", specifier = ">=0.26.0" },
-    { name = "litellm", specifier = ">=1.83.7" },
+    { name = "litellm", specifier = ">=1.85.0" },
     { name = "orjson", specifier = ">=3.11.6" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pygments", specifier = ">=2.20.0" },
