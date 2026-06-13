@@ -1,0 +1,398 @@
+{
+  "generated_at": "2026-06-06T00:00:00Z",
+  "modules": [
+    {
+      "name": "classifiers",
+      "path": "src/classifiers/",
+      "purpose": "Classificação automática de itens de notas fiscais usando embeddings semânticos (ChromaDB) e LLM (LiteLLM/Gemini)",
+      "primary_files": [
+        "src/classifiers/__init__.py",
+        "src/classifiers/llm_classifier.py",
+        "src/classifiers/embeddings.py"
+      ],
+      "functions": [
+        {
+          "name": "classificar_itens_pendentes",
+          "file": "src/classifiers/__init__.py",
+          "params": ["limit: int", "confirmar: bool", "db_path: str | None", "classifier: LLMClassifier | None", "model: str | None", "temperature: float | None", "chave_acesso: str | None", "model_priority: Sequence[str] | None", "progress_callback: Callable | None", "incluir_confirmados: bool", "limpar_confirmadas_antes: bool", "forcar_llm: bool"],
+          "returns": "list[ClassificacaoResultado]",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "classificar_itens (LLMClassifier)",
+          "file": "src/classifiers/llm_classifier.py",
+          "params": ["itens: Sequence[ItemParaClassificacao]", "model_priority: Sequence[str] | None", "progress_callback: Callable | None"],
+          "returns": "list[ClassificacaoResultado]",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "inicializar_modelo_embeddings",
+          "file": "src/classifiers/embeddings.py",
+          "params": [],
+          "returns": "SentenceTransformer",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "upsert_descricao_embedding",
+          "file": "src/classifiers/embeddings.py",
+          "params": ["descricao_original: str", "nome_base: str", "marca_base: str | None", "categoria: str | None", "produto_id: int | None"],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "buscar_produtos_semelhantes",
+          "file": "src/classifiers/embeddings.py",
+          "params": ["descricao: str", "top_k: int"],
+          "returns": "List[Dict[str, Any]]",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "ModeloConfig",
+          "fields": [
+            {"name": "nome", "type": "str", "required": true},
+            {"name": "api_key_env", "type": "str", "required": true},
+            {"name": "max_tokens", "type": "int", "required": true},
+            {"name": "max_itens", "type": "int", "required": true},
+            {"name": "timeout", "type": "float", "required": true},
+            {"name": "nome_amigavel", "type": "str | None", "required": false},
+            {"name": "extra_body", "type": "dict | None", "required": false}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "ClassificacaoResultado",
+          "fields": [
+            {"name": "chave_acesso", "type": "str", "required": true},
+            {"name": "sequencia", "type": "int", "required": true},
+            {"name": "categoria", "type": "str", "required": true},
+            {"name": "confianca", "type": "float | None", "required": false},
+            {"name": "origem", "type": "str", "required": true},
+            {"name": "modelo", "type": "str | None", "required": false},
+            {"name": "observacoes", "type": "str | None", "required": false},
+            {"name": "resposta_json", "type": "str | None", "required": false},
+            {"name": "produto_nome", "type": "str | None", "required": false},
+            {"name": "produto_marca", "type": "str | None", "required": false}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "_RespostaLLM",
+          "fields": [
+            {"name": "categoria", "type": "str", "required": true},
+            {"name": "confianca", "type": "float | None", "required": false},
+            {"name": "justificativa", "type": "str | None", "required": false},
+            {"name": "produto_nome", "type": "str | None", "required": false},
+            {"name": "produto_marca", "type": "str | None", "required": false}
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {"description": "Classificação híbrida: primeiro tenta cache semântico (ChromaDB), fallback para LLM", "location": "src/classifiers/__init__.py:153-189", "confidence": "confirmed"},
+        {"description": "Score mínimo de similaridade semântica: 0.82 para considerar match do cache", "location": "src/database/__init__.py:467", "confidence": "confirmed"},
+        {"description": "Fallback automático entre modelos LLM: tenta em ordem de prioridade do TOML", "location": "src/classifiers/llm_classifier.py:396-462", "confidence": "confirmed"},
+        {"description": "Modelo de embeddings: all-MiniLM-L6-v2 com cache local offline-first", "location": "src/classifiers/embeddings.py:95-185", "confidence": "confirmed"}
+      ],
+      "dependencies": ["database", "logger"],
+      "algorithms": [
+        {"name": "Classificação híbrida (cache semântico + LLM)", "file": "src/classifiers/__init__.py", "line": 150},
+        {"name": "Fallback entre modelos LLM com retry", "file": "src/classifiers/llm_classifier.py", "line": 396},
+        {"name": "Busca por similaridade vetorial (ChromaDB)", "file": "src/classifiers/embeddings.py", "line": 305},
+        {"name": "Cache de modelos com double-checked locking", "file": "src/classifiers/embeddings.py", "line": 95}
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "database",
+      "path": "src/database/",
+      "purpose": "Camada de persistência SQLite3 com schema completo, CRUD de notas fiscais, padronização de produtos e consultas analíticas",
+      "primary_files": [
+        "src/database/__init__.py"
+      ],
+      "functions": [
+        {
+          "name": "inicializar_banco",
+          "file": "src/database/__init__.py",
+          "params": ["db_path: Path | str | None"],
+          "returns": "sqlite3.Connection",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "salvar_nota",
+          "file": "src/database/__init__.py",
+          "params": ["nota: NotaFiscal", "db_path: Path | str | None"],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "normalizar_produto_descricao",
+          "file": "src/database/__init__.py",
+          "params": ["descricao: str | None"],
+          "returns": "tuple[str, Optional[str]]",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "normalizar_nome_produto_universal",
+          "file": "src/database/__init__.py",
+          "params": ["nome: str | None"],
+          "returns": "str",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "registrar_classificacao_itens",
+          "file": "src/database/__init__.py",
+          "params": ["dados: Sequence[Mapping]", "confirmar: bool", "db_path: Path | str | None"],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "registrar_revisoes_manuais",
+          "file": "src/database/__init__.py",
+          "params": ["registros: Sequence[Mapping]", "confirmar: bool", "usuario: str | None", "observacoes_padrao: str | None", "db_path: Path | str | None"],
+          "returns": "None",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "ItemParaClassificacao",
+          "fields": [
+            {"name": "chave_acesso", "type": "str", "required": true},
+            {"name": "sequencia", "type": "int", "required": true},
+            {"name": "descricao", "type": "str", "required": true},
+            {"name": "codigo", "type": "Optional[str]", "required": false},
+            {"name": "quantidade", "type": "Optional[Decimal]", "required": false},
+            {"name": "unidade", "type": "Optional[str]", "required": false},
+            {"name": "valor_unitario", "type": "Optional[Decimal]", "required": false},
+            {"name": "valor_total", "type": "Optional[Decimal]", "required": false},
+            {"name": "categoria_sugerida", "type": "Optional[str]", "required": false},
+            {"name": "categoria_confirmada", "type": "Optional[str]", "required": false},
+            {"name": "emitente_nome", "type": "Optional[str]", "required": false},
+            {"name": "emissao_iso", "type": "Optional[str]", "required": false}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Categoria",
+          "fields": [
+            {"name": "id", "type": "Optional[int]", "required": false},
+            {"name": "grupo", "type": "str", "required": true},
+            {"name": "nome", "type": "str", "required": true},
+            {"name": "ativo", "type": "bool", "required": true}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "ProdutoPadronizado",
+          "fields": [
+            {"name": "id", "type": "Optional[int]", "required": false},
+            {"name": "nome_base", "type": "str", "required": true},
+            {"name": "marca_base", "type": "Optional[str]", "required": false},
+            {"name": "categoria_id", "type": "Optional[int]", "required": false}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "ItemPadronizado",
+          "fields": [
+            {"name": "chave_acesso", "type": "str", "required": true},
+            {"name": "sequencia", "type": "int", "required": true},
+            {"name": "data_emissao", "type": "str | None", "required": false},
+            {"name": "ano", "type": "int | None", "required": false},
+            {"name": "mes", "type": "int | None", "required": false},
+            {"name": "ano_mes", "type": "str | None", "required": false},
+            {"name": "estabelecimento_id", "type": "int | None", "required": false},
+            {"name": "estabelecimento_nome", "type": "str | None", "required": false},
+            {"name": "estabelecimento_cnpj", "type": "str | None", "required": false},
+            {"name": "categoria", "type": "str | None", "required": false},
+            {"name": "categoria_id", "type": "int | None", "required": false},
+            {"name": "valor_total", "type": "Decimal | None", "required": false},
+            {"name": "quantidade", "type": "Decimal | None", "required": false}
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {"description": "Notas usam upsert (ON CONFLICT) para evitar duplicatas por chave de acesso", "location": "src/database/__init__.py:1592-1609", "confidence": "confirmed"},
+        {"description": "Remoção de nota é cascata: class_historico → revisoes → itens → pagamentos → nota", "location": "src/database/__init__.py:697-735", "confidence": "confirmed"},
+        {"description": "Produto é resolvido por: alias exato → normalização descrição → criação", "location": "src/database/__init__.py:1702-1767", "confidence": "confirmed"},
+        {"description": "Marcas conhecidas hardcoded (Tio João, Sadia, Nestlé, Ambev, etc)", "location": "src/database/__init__.py:433-453", "confidence": "confirmed"},
+        {"description": "Normalização de produtos: remove unidades, detecta marca, aplica title case", "location": "src/database/__init__.py:502-539", "confidence": "confirmed"}
+      ],
+      "dependencies": ["scrapers", "logger", "classifiers"],
+      "algorithms": [
+        {"name": "Normalização de descrições (remove unidades, detecta marcas)", "file": "src/database/__init__.py", "line": 502},
+        {"name": "Resolução de produto por alias (cache de aprendizado)", "file": "src/database/__init__.py", "line": 1702},
+        {"name": "Busca por similaridade via embeddings", "file": "src/database/__init__.py", "line": 385}
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "scrapers",
+      "path": "src/scrapers/",
+      "purpose": "Web scraping de notas fiscais eletrônicas (NFC-e) do portal da SEFAZ-RS",
+      "primary_files": [
+        "src/scrapers/receita_rs.py"
+      ],
+      "functions": [
+        {
+          "name": "buscar_nota",
+          "file": "src/scrapers/receita_rs.py",
+          "params": ["chave: str", "client: httpx.Client | None"],
+          "returns": "NotaFiscal",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "parse_nfce_html",
+          "file": "src/scrapers/receita_rs.py",
+          "params": ["html: str"],
+          "returns": "NotaFiscal",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "baixar_html",
+          "file": "src/scrapers/receita_rs.py",
+          "params": ["chave: str", "client: httpx.Client | None", "destino_html: Path | None"],
+          "returns": "str",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "NotaFiscal",
+          "fields": [
+            {"name": "chave_acesso", "type": "str", "required": true},
+            {"name": "emitente_nome", "type": "Optional[str]", "required": false},
+            {"name": "emitente_cnpj", "type": "Optional[str]", "required": false},
+            {"name": "emitente_endereco", "type": "Optional[str]", "required": false},
+            {"name": "numero", "type": "Optional[str]", "required": false},
+            {"name": "serie", "type": "Optional[str]", "required": false},
+            {"name": "emissao", "type": "Optional[str]", "required": false},
+            {"name": "itens", "type": "List[NotaItem]", "required": true},
+            {"name": "total_itens", "type": "Optional[int]", "required": false},
+            {"name": "valor_total", "type": "Optional[Decimal]", "required": false},
+            {"name": "valor_pago", "type": "Optional[Decimal]", "required": false},
+            {"name": "pagamentos", "type": "List[Pagamento]", "required": true},
+            {"name": "tributos", "type": "Optional[Decimal]", "required": false},
+            {"name": "consumidor_cpf", "type": "Optional[str]", "required": false},
+            {"name": "consumidor_nome", "type": "Optional[str]", "required": false}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "NotaItem",
+          "fields": [
+            {"name": "descricao", "type": "str", "required": true},
+            {"name": "codigo", "type": "Optional[str]", "required": false},
+            {"name": "quantidade", "type": "Decimal", "required": true},
+            {"name": "unidade", "type": "str", "required": true},
+            {"name": "valor_unitario", "type": "Decimal", "required": true},
+            {"name": "valor_total", "type": "Decimal", "required": true}
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Pagamento",
+          "fields": [
+            {"name": "forma", "type": "str", "required": true},
+            {"name": "valor", "type": "Decimal", "required": true}
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {"description": "Chave de acesso NFC-e deve ter exatamente 44 dígitos numéricos", "location": "src/scrapers/receita_rs.py:97-101", "confidence": "confirmed"},
+        {"description": "HTML da SEFAZ-RS é ISO-8859-1, convertido para UTF-8 com meta charset forçado", "location": "src/scrapers/receita_rs.py:171-223", "confidence": "confirmed"},
+        {"description": "Dois layouts de HTML suportados: spans modernos e tabelas legadas", "location": "src/scrapers/receita_rs.py:374-443", "confidence": "confirmed"},
+        {"description": "HTML bruto é persistido em data/raw_nfce/ para depuração", "location": "src/scrapers/receita_rs.py:163-168", "confidence": "confirmed"}
+      ],
+      "dependencies": [],
+      "algorithms": [],
+      "complexity": "medium"
+    },
+    {
+      "name": "ui",
+      "path": "src/ui/",
+      "purpose": "Interface Streamlit com 5 páginas: Home, Importação, Análise, Normalização e Relatórios",
+      "primary_files": [
+        "src/ui/home.py",
+        "src/ui/importacao.py",
+        "src/ui/analise.py",
+        "src/ui/normalizacao.py",
+        "src/ui/relatorios.py"
+      ],
+      "functions": [
+        {
+          "name": "render_home",
+          "file": "src/ui/home.py",
+          "params": [],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "render_pagina_importacao",
+          "file": "src/ui/importacao.py",
+          "params": [],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "render_pagina_analise",
+          "file": "src/ui/analise.py",
+          "params": [],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "render_pagina_normalizacao",
+          "file": "src/ui/normalizacao.py",
+          "params": [],
+          "returns": "None",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "render_pagina_relatorios",
+          "file": "src/ui/relatorios.py",
+          "params": [],
+          "returns": "None",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [],
+      "business_rules": [
+        {"description": "Navegação centralizada via dicionário PAGINAS em main.py", "location": "main.py:26-32", "confidence": "confirmed"},
+        {"description": "Importação com confirmação de reprocessamento para notas já existentes", "location": "src/ui/importacao.py:216-288", "confidence": "confirmed"},
+        {"description": "Relatórios calculam inflação acumulada e cesta básica personalizada", "location": "src/ui/relatorios.py:81-103", "confidence": "confirmed"},
+        {"description": "Normalização usa threshold de similaridade (70-100%) ajustável pelo usuário", "location": "src/ui/normalizacao.py:346-352", "confidence": "confirmed"}
+      ],
+      "dependencies": ["database", "classifiers", "scrapers", "logger"],
+      "algorithms": [
+        {"name": "Cálculo de inflação acumulada composta", "file": "src/ui/relatorios.py", "line": 81},
+        {"name": "Identificação de produtos regulares (meses consecutivos)", "file": "src/ui/relatorios.py", "line": 106},
+        {"name": "Preenchimento de meses faltantes com último preço (forward fill)", "file": "src/ui/relatorios.py", "line": 26}
+      ],
+      "complexity": "medium"
+    },
+    {
+      "name": "config",
+      "path": "config/",
+      "purpose": "Configuração de modelos LLM em formato TOML, com fallback automático para Gemini",
+      "primary_files": [
+        "config/modelos_llm.toml",
+        ".env.example"
+      ],
+      "functions": [],
+      "entities": [],
+      "business_rules": [
+        {"description": "Ordem no TOML define prioridade de fallback entre modelos LLM", "location": "config/modelos_llm.toml:1-3", "confidence": "confirmed"},
+        {"description": "API keys lidas de variáveis de ambiente definidas no .env", "location": ".env.example:7-9", "confidence": "confirmed"},
+        {"description": "Fallback hardcoded para Gemini se TOML não puder ser lido", "location": "src/classifiers/llm_classifier.py:48-65", "confidence": "confirmed"}
+      ],
+      "dependencies": [],
+      "algorithms": [],
+      "complexity": "low"
+    }
+  ]
+}

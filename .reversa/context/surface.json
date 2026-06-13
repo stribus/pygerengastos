@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-06-06T00:00:00Z",
+  "project_root": "F:\\projetos\\python\\Gerenciador de despesa",
+  "languages": [
+    {
+      "name": "Python",
+      "extensions": [".py"],
+      "file_count": 30
+    }
+  ],
+  "primary_language": "Python",
+  "frameworks": [
+    { "name": "Streamlit", "version": "1.54.0", "source": "pyproject.toml" },
+    { "name": "LiteLLM", "version": "1.86.2", "source": "requirements.txt" },
+    { "name": "ChromaDB", "version": "1.5.7", "source": "pyproject.toml" },
+    { "name": "sentence-transformers", "version": "5.4.0", "source": "pyproject.toml" },
+    { "name": "BeautifulSoup4", "version": "4.14.3", "source": "pyproject.toml" },
+    { "name": "pandas", "version": "2.3.3", "source": "requirements.txt" }
+  ],
+  "package_manager": "uv",
+  "entry_points": [
+    { "path": "main.py", "type": "app_entry" }
+  ],
+  "config_files": [
+    "pyproject.toml",
+    ".env.example",
+    "config/modelos_llm.toml"
+  ],
+  "ci_cd": [],
+  "docker": null,
+  "database_hints": [
+    { "path": "data/gastos.db", "type": "sqlite3" },
+    { "path": "data/chroma/", "type": "chromadb" },
+    { "path": "src/database/__init__.py", "type": "orm_models" }
+  ],
+  "test_framework": "pytest",
+  "test_file_count": 15,
+  "test_loc": 3711,
+  "modules": [
+    "classifiers",
+    "database",
+    "scrapers",
+    "ui",
+    "config"
+  ],
+  "total_files": 178,
+  "total_loc": 9732,
+  "organization_suggestion": {
+    "granularity": "module",
+    "rationale": "A estrutura de pastas top-level em src/ está organizada por domínio: classifiers/, database/, scrapers/, ui/.",
+    "signals": [
+      {
+        "type": "top_level_domain_folders",
+        "evidence": [
+          "src/classifiers/",
+          "src/database/",
+          "src/scrapers/",
+          "src/ui/"
+        ]
+      }
+    ],
+    "features": []
+  }
+}
