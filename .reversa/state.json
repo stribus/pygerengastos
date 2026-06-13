@@ -12,6 +12,14 @@
   "doc_level": "completo",
   "completed": ["scout", "archaeologist", "detective", "architect", "writer", "reviewer"],
   "pending": [],
+  "redator_progress": {
+    "last_action": "complemento-cobertura-IMPLEMENTACAO.md",
+    "updated_at": "2026-06-13T00:00:00Z",
+    "added": [
+      "_reversa_sdd/ui/requirements.md: RF-20, RF-21 (toggles ocultar/exibir), regras de negócio, critérios de aceitação, rastreabilidade",
+      "_reversa_sdd/database/requirements.md: RF-11 (obter_unidades_produtos), nota 'ignorando marcas' em RF-10, RNF tempo <2s, rastreabilidade"
+    ]
+  },
   "checkpoints": {
     "scout": {
       "completed_at": "2026-06-06T00:00:00Z",

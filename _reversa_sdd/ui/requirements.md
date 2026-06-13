@@ -25,6 +25,8 @@ Interface web construída com Streamlit para gerenciamento de notas fiscais elet
 - Produtos regulares para inflação: comprados em pelo menos 2 meses consecutivos 🟢
 - Meses faltantes em série temporal são preenchidos com último preço conhecido (forward fill) 🟢
 - Período padrão de relatórios: últimos 12 meses 🟢
+- Cada produto listado tem checkbox marcado por padrão; se nenhum produto for selecionado, exibe aviso e não renderiza o gráfico 🟢
+- Inflação Média e Cesta Básica são séries opcionais controladas por checkboxes independentes 🟢
 
 ## Requisitos Funcionais
 
@@ -49,6 +51,8 @@ Interface web construída com Streamlit para gerenciamento de notas fiscais elet
 | RF-17 | Exibir inflação acumulada por produto e média | Must | Tab de Inflação Acumulada com gráfico de linhas |
 | RF-18 | Calcular cesta básica personalizada | Should | Custo mensal da cesta com produtos regulares |
 | RF-19 | Exportar relatório de inflação para CSV | Could | Download button com encoding UTF-8 BOM |
+| RF-20 | Ocultar/exibir produtos individualmente no gráfico | Should | Checkbox por produto (default marcado); só os visíveis entram no gráfico de custos e de inflação |
+| RF-21 | Alternar exibição de séries agregadas (Inflação Média e Cesta Básica) | Could | Checkboxes `mostrar_media` e `mostrar_cesta` no gráfico de inflação |
 
 ## Requisitos Não Funcionais
 
@@ -89,6 +93,14 @@ Então os clusters de produtos similares são recalculados
 Dado que o usuário está na página de Relatórios
 Quando seleciona um período
 Então os gráficos de custos unitários e inflação são exibidos
+
+Dado que o usuário está na página de Relatórios com produtos listados
+Quando desmarca o checkbox de um produto
+Então esse produto deixa de aparecer no gráfico
+
+Dado que o usuário desmarca todos os produtos
+Quando o gráfico tentaria renderizar
+Então um aviso é exibido e nenhum gráfico é renderizado
 ```
 
 ## Prioridade (MoSCoW)
@@ -115,3 +127,5 @@ Então os gráficos de custos unitários e inflação são exibidos
 | `src/ui/normalizacao.py` | `render_pagina_normalizacao()` | 🟢 |
 | `src/ui/relatorios.py` | `render_pagina_relatorios()` | 🟢 |
 | `src/ui/relatorios.py` | `render_grafico_inflacao()` | 🟢 |
+| `src/ui/relatorios.py:255` | Checkbox por produto (custos) | 🟢 |
+| `src/ui/relatorios.py:423-438` | Checkboxes de itens, média e cesta (inflação) | 🟢 |

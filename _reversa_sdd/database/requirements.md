@@ -28,6 +28,8 @@ Camada de persistência SQLite3 completa com schema de 10 tabelas + 1 view, CRUD
 - Consolidação de estabelecimento é incremental (nunca sobrescreve) 🟢
 - Consolidação de produto: destino com mais itens, origem deletada 🟢
 - Alias de terceiros não são migrados durante consolidação 🟢
+- Top de produtos para relatórios agrupa por `produto_nome`, ignorando marcas 🟢
+- Unidade de um produto é a mais frequente entre seus itens (desempate por `COUNT` desc) 🟢
 
 ## Requisitos Funcionais
 
@@ -42,7 +44,8 @@ Camada de persistência SQLite3 completa com schema de 10 tabelas + 1 view, CRUD
 | RF-07 | Consolidar produtos duplicados | Should | Merge de produto origem em destino com migração de aliases e embeddings |
 | RF-08 | Obter KPIs gerais (total notas, gasto, pendentes) | Must | Dashboard inicial com 3 métricas |
 | RF-09 | Obter custos unitários mensais por produto | Must | Preço médio ponderado (SUM valor_total / SUM quantidade) por mês |
-| RF-10 | Obter top produtos por quantidade no período | Should | Top N produtos mais comprados para relatórios |
+| RF-10 | Obter top produtos por quantidade no período | Should | Top N produtos mais comprados; agrupado por `produto_nome` ignorando marcas (`GROUP BY produto_nome`) |
+| RF-11 | Obter unidade predominante por produto | Should | `obter_unidades_produtos()` retorna mapa produto→unidade mais frequente (maior `COUNT`) para rotular gráficos |
 
 ## Requisitos Não Funcionais
 
@@ -51,6 +54,7 @@ Camada de persistência SQLite3 completa com schema de 10 tabelas + 1 view, CRUD
 | Performance | Índices em chave_acesso, produto_nome e categoria | `database/__init__.py:240-248` | 🟢 |
 | Integridade | ON CONFLIT para upsert de notas | `database/__init__.py:1592` | 🟢 |
 | Integridade | Remoção em cascata manual (SQLite não suporta CASCADE nativo) | `database/__init__.py:697-735` | 🟢 |
+| Performance | Tempo de resposta das queries de relatório < 2s para 12 meses de dados | Meta documentada em `IMPLEMENTACAO.md` (queries com agregação no banco; < 500ms medido em integração) | 🟡 |
 
 ## Critérios de Aceitação
 
@@ -92,4 +96,7 @@ E produto origem é deletado
 | `src/database/__init__.py:1702-1767` | Resolução produto | 🟢 |
 | `src/database/__init__.py:1969-2066` | Estabelecimentos | 🟢 |
 | `src/database/__init__.py:2166-2430` | Queries analíticas | 🟢 |
+| `src/database/__init__.py:2236` | `obter_top_produtos_por_quantidade()` | 🟢 |
+| `src/database/__init__.py:2285` | `obter_custos_unitarios_mensais()` | 🟢 |
+| `src/database/__init__.py:2342` | `obter_unidades_produtos()` | 🟢 |
 | `src/database/__init__.py:2654-2858` | Consolidação | 🟢 |
