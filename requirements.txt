@@ -3,7 +3,9 @@
 aiohappyeyeballs==2.6.1
     # via aiohttp
 aiohttp==3.14.0
-    # via litellm
+    # via
+    #   gerenciador-de-despesa (pyproject.toml)
+    #   litellm
 aiosignal==1.4.0
     # via aiohttp
 altair==6.0.0
