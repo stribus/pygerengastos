@@ -32,6 +32,7 @@ def _preencher_meses_faltantes(
     """Preenche meses faltantes com o último preço conhecido para cada produto.
 
     Retorna DataFrame com colunas: ano_mes, produto_nome, custo_unitario_medio
+    Garante que todos os produtos apareçam em todos os meses do período.
     """
     # Converter dados para DataFrame
     df = pd.DataFrame(dados)
@@ -68,12 +69,12 @@ def _preencher_meses_faltantes(
                 # Usa último preço conhecido ou None
                 preco = ultimo_preco
 
-            if preco is not None:
-                linhas_completas.append({
-                    "ano_mes": mes,
-                    "produto_nome": produto,
-                    "custo_unitario_medio": preco
-                })
+            # Sempre adicionar a linha para garantir alinhamento correto de meses
+            linhas_completas.append({
+                "ano_mes": mes,
+                "produto_nome": produto,
+                "custo_unitario_medio": preco
+            })
 
     return pd.DataFrame(linhas_completas)
 
@@ -82,23 +83,39 @@ def _calcular_inflacao_acumulada(
     df: pd.DataFrame,
     coluna_mes: str = "ano_mes",
     coluna_valor: str = "custo_unitario_medio",
-) -> list[float]:
+) -> list[float | None]:
     """Calcula inflação acumulada para série temporal de preços.
 
     Retorna lista de valores de inflação acumulada em percentual.
+    Valores None são preservados para meses sem dados.
     """
     if df.empty:
         return []
 
     valores = df[coluna_valor].tolist()
-    inflacao_acumulada = [0.0]  # Primeiro mês sempre 0%
+    inflacao_acumulada = [None] * len(valores)
 
-    for i in range(1, len(valores)):
-        var_percentual = _calcular_variacao_percentual(valores[i-1], valores[i])
-        # Acumular: (1 + inflacao_anterior/100) * (1 + var_atual/100) - 1
-        inflacao_anterior = inflacao_acumulada[-1]
-        inflacao_nova = ((1 + inflacao_anterior/100) * (1 + var_percentual/100) - 1) * 100
-        inflacao_acumulada.append(inflacao_nova)
+    # Encontrar o primeiro valor não-None
+    idx_inicio = None
+    for i, val in enumerate(valores):
+        if val is not None:
+            idx_inicio = i
+            break
+
+    if idx_inicio is None:
+        return inflacao_acumulada
+
+    # Começar inflação a partir do primeiro valor não-None
+    inflacao_acumulada[idx_inicio] = 0.0
+
+    for i in range(idx_inicio + 1, len(valores)):
+        if valores[i] is not None and valores[i-1] is not None:
+            var_percentual = _calcular_variacao_percentual(valores[i-1], valores[i])
+            # Acumular: (1 + inflacao_anterior/100) * (1 + var_atual/100) - 1
+            inflacao_anterior = inflacao_acumulada[i-1]
+            if inflacao_anterior is not None:
+                inflacao_nova = ((1 + inflacao_anterior/100) * (1 + var_percentual/100) - 1) * 100
+                inflacao_acumulada[i] = inflacao_nova
 
     return inflacao_acumulada
 
@@ -369,14 +386,23 @@ def render_grafico_inflacao() -> None:
     inflacao_por_produto = {}
     meses_ordenados = sorted(df_completo["ano_mes"].unique())
 
+    # Criar mapa de índices para alinhamento correto
+    mapa_mes_idx = {mes: idx for idx, mes in enumerate(meses_ordenados)}
+
     for produto in produtos_nomes:
         df_produto = df_completo[df_completo["produto_nome"] == produto].sort_values("ano_mes")
         if not df_produto.empty:
-            inflacao = _calcular_inflacao_acumulada(df_produto)
-            # Garantir que a lista tenha o mesmo tamanho de meses_ordenados
-            # preenchendo com NaN para meses sem dados
-            inflacao_alinhada = [inflacao[i] if i < len(inflacao) else float('nan')
-                                 for i in range(len(meses_ordenados))]
+            inflacao_calculada = _calcular_inflacao_acumulada(df_produto)
+            meses_produto = df_produto["ano_mes"].tolist()
+
+            # Criar lista alinhada com meses_ordenados
+            inflacao_alinhada = [float('nan')] * len(meses_ordenados)
+
+            # Mapear cada valor de inflação para seu mês correto
+            for idx, mes in enumerate(meses_produto):
+                if mes in mapa_mes_idx and inflacao_calculada[idx] is not None:
+                    inflacao_alinhada[mapa_mes_idx[mes]] = inflacao_calculada[idx]
+
             inflacao_por_produto[produto] = inflacao_alinhada
 
     # Calcular inflação média (apenas produtos regulares)
@@ -399,11 +425,14 @@ def render_grafico_inflacao() -> None:
     df_cesta = _calcular_cesta_basica_personalizada(df_completo, produtos_regulares)
     if not df_cesta.empty:
         inflacao_cesta_lista = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
-        # Alinhar com meses_ordenados
-        inflacao_cesta = [inflacao_cesta_lista[i] if i < len(inflacao_cesta_lista) else 0.0
-                          for i in range(len(meses_ordenados))]
+        # Alinhar com meses_ordenados usando mapeamento correto
+        inflacao_cesta = [float('nan')] * len(meses_ordenados)
+        meses_cesta = df_cesta["ano_mes"].tolist()
+        for idx, mes in enumerate(meses_cesta):
+            if mes in mapa_mes_idx and inflacao_cesta_lista[idx] is not None:
+                inflacao_cesta[mapa_mes_idx[mes]] = inflacao_cesta_lista[idx]
     else:
-        inflacao_cesta = [0.0] * len(meses_ordenados)
+        inflacao_cesta = [float('nan')] * len(meses_ordenados)
 
     # Buscar unidades dos produtos
     unidades = obter_unidades_produtos(produtos_nomes)
@@ -515,19 +544,8 @@ def render_grafico_inflacao() -> None:
             .reindex(meses_ordenados)
         )
 
-        # Inflação da cesta alinhada com meses_ordenados
-        # Preenche meses faltantes com último valor conhecido (comportamento original)
-        if len(inflacao_cesta) < len(meses_ordenados):
-            # Preencher com último valor (ou None se lista vazia)
-            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else None
-            inflacao_cesta_alinhada = inflacao_cesta + [
-                ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
-            ]
-        else:
-            # Truncar para o tamanho correto
-            inflacao_cesta_alinhada = inflacao_cesta[:len(meses_ordenados)]
-
-        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
+        # Inflação da cesta já está alinhada com meses_ordenados
+        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta
 
     # 4. Intercalar colunas de preço e inflação para cada produto
     colunas_ordenadas = ["Mês"]
