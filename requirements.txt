@@ -317,7 +317,7 @@ scipy==1.17.1
     #   sentence-transformers
 sentence-transformers==5.4.0
     # via gerenciador-de-despesa (pyproject.toml)
-setuptools==81.0.0
+setuptools==83.0.0
     # via torch
 shellingham==1.5.4
     # via typer
