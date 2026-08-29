@@ -2784,43 +2784,14 @@ def consolidar_produtos(
 				[produto_id_destino, nome_final or destino_row[0] or None, produto_id_origem]
 			).rowcount
 
-			# Migrar aliases
-			aliases_origem = con.execute(
-				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
-				[produto_id_origem]
-			).fetchall()
-
-			for alias_row in aliases_origem:
-				texto_alias = alias_row[0]
-				try:
-					con.execute(
-						"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
-						[produto_id_destino, texto_alias]
-					)
-					aliases_migrados += 1
-				except sqlite3.IntegrityError:
-					# Conflito: O alias já existe. Verificar se pertence ao produto de destino ou a um terceiro produto
-					produto_atual_alias = con.execute(
-						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
-						[texto_alias]
-					).fetchone()
-
-					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
-						# Alias já pertence ao produto de destino - operação nula, não é erro
-						logger.debug(
-							"Alias '%s' já pertence ao produto de destino %d (migração não necessária)",
-							texto_alias, produto_id_destino
-						)
-					else:
-						# Alias pertence a um terceiro produto - não migrar para evitar corrupção de dados
-						logger.warning(
-							"Não foi possível migrar o alias '%s' do produto de origem %d para o destino %d, "
-							"pois o alias já está em uso pelo produto %d.",
-							texto_alias, produto_id_origem, produto_id_destino, produto_atual_alias[0] if produto_atual_alias else None
-						)
-
-			# Deletar aliases antigos (agora todos já foram migrados)
-			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
+			# Migrar aliases reapontando-os para o destino.
+			# aliases_produtos tem UNIQUE (texto_original) global, então cada texto
+			# pertence a um único produto: os aliases da origem jamais colidem com os
+			# do destino ou de terceiros, e o UPDATE não pode violar a constraint.
+			aliases_migrados = con.execute(
+				"UPDATE aliases_produtos SET produto_id = ? WHERE produto_id = ?",
+				[produto_id_destino, produto_id_origem]
+			).rowcount
 
 			# Deletar produto origem (agora sem referências dangling)
 			# Foreign keys estão habilitadas - se falhar, há um bug
