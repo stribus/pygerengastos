@@ -1274,14 +1274,21 @@ def registrar_classificacao_itens(
 			raise
 
 
-def limpar_categorias_confirmadas(
+def limpar_categorias_para_reclassificacao(
 	chave_acesso: str,
 	*,
 	db_path: Path | str | None = None,
 ) -> int:
 	"""
-	Remove todas as categorias (confirmadas e sugeridas) de todos os itens de uma nota,
-	voltando ao estado pendente para reclassificação.
+	Remove as categorias sugerida E confirmada dos itens já confirmados de uma nota,
+	devolvendo-os à fila de reclassificação.
+
+	As duas precisam ser zeradas: listar_itens_para_classificacao() só considera
+	pendente o item com `categoria_confirmada IS NULL AND categoria_sugerida IS NULL`
+	(no caminho padrão, com incluir_confirmados=False). Preservar a sugerida deixaria
+	o item fora da fila e tornaria esta limpeza um no-op. A sugerida é dado derivado,
+	regenerado pela classificação; a confirmada é a entrada humana que se está
+	explicitamente descartando.
 
 	Note: Preserva produto_id e embeddings para permitir cache semântico.
 	Para reset completo incluindo produtos, use limpar_classificacoes_completas().
