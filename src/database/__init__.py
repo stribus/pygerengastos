@@ -2430,6 +2430,44 @@ def obter_quantidades_mensais_produtos(
 		for row in rows
 	]
 
+
+def obter_meses_com_notas(
+	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
+	db_path: Path | str | None = None,
+) -> list[str]:
+	"""Retorna os meses ("YYYY-MM") que possuem ao menos uma nota importada.
+
+	Usado pelos relatórios para distinguir mês sem compra de mês sem coleta:
+	um mês ausente da lista não teve nenhuma nota importada e, portanto, não
+	deve penalizar a regularidade de nenhum produto.
+	"""
+	filtros = ["emissao_data IS NOT NULL"]
+	params: list[object] = []
+
+	if data_inicio:
+		filtros.append("emissao_data >= ?")
+		params.append(data_inicio)
+	if data_fim:
+		filtros.append("emissao_data <= ?")
+		params.append(data_fim)
+
+	where_clause = " AND ".join(filtros)
+
+	query = f"""
+		SELECT DISTINCT strftime('%Y-%m', emissao_data) as ano_mes
+		FROM notas
+		WHERE {where_clause}
+		ORDER BY ano_mes
+	"""
+
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+
+	return [row[0] for row in rows if row[0]]
+
+
 def listar_produtos_similares(
 	threshold: int = 85,
 	*,

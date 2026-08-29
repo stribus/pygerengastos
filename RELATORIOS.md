@@ -37,7 +37,7 @@ A funcionalidade de relatórios permite acompanhar a evolução dos preços dos 
 - Calcula a variação percentual acumulada dos preços ao longo do tempo
 - Mostra top 10 produtos mais comprados
 - Preenche meses sem compra com o último preço conhecido
-- Identifica produtos regulares (⭐) - comprados em meses consecutivos
+- Identifica produtos regulares (⭐) - comprados com frequência nos últimos 6 meses com notas importadas
 - Calcula "Inflação Média" dos produtos regulares
 - Calcula "Cesta Básica Personalizada" - média ponderada dos produtos que você compra regularmente
 - Permite exportar dados para Excel/CSV
@@ -53,13 +53,17 @@ A funcionalidade de relatórios permite acompanhar a evolução dos preços dos 
 
 **Conceitos importantes:**
 
-- **Produto Regular (⭐)**: Produtos comprados em pelo menos 2 meses consecutivos. Apenas estes entram no cálculo da inflação média, pois produtos esporádicos distorcem a análise.
+- **Produto Regular (⭐)**: Avaliado sobre os últimos 6 **meses ativos** do período selecionado (ou sobre todos eles, se forem menos). O produto é regular quando nunca fica 2 meses seguidos sem compra dentro dessa janela (incluindo as bordas). Produtos vendidos por unidade (UN, PC...) contam o mês quando há pelo menos 1 unidade comprada; produtos fracionados (KG, G, L, ML...) contam qualquer quantidade, mas exigem também média mensal de quantidade acima de 0,1 na janela. Apenas produtos regulares entram no cálculo da inflação média e da cesta básica, pois produtos esporádicos distorcem a análise.
 
-- **Inflação Média**: Média da inflação acumulada apenas dos produtos regulares. Ignora produtos comprados esporadicamente.
+- **Mês ativo**: Mês em que ao menos uma nota foi importada. Meses sem nenhuma nota são descartados da janela de regularidade — eles indicam lacuna de coleta, não ausência de compra, e penalizariam todos os produtos ao mesmo tempo.
+
+- **Inflação Média**: Média da inflação acumulada apenas dos produtos regulares. Ignora produtos comprados esporadicamente. Se nenhum produto atingir o critério no período, a tela exibe um aviso e passa a calcular a média e a cesta com **todos os produtos** do top — nunca uma linha reta em 0% sem explicação. Mês sem nenhum dado fica vazio no gráfico (NaN), e não em 0%.
 
 - **Cesta Básica Personalizada**: Calcula o custo médio mensal dos produtos que você compra regularmente. Útil para entender quanto sua cesta de compras típica está variando.
 
-- **Preenchimento de Meses**: Se você não comprou um produto em um mês específico, o sistema usa o preço da última compra para manter a continuidade da análise.
+- **Preenchimento de Meses (forward fill)**: Se você não comprou um produto em um mês específico, o sistema usa o preço da última compra para manter a continuidade da análise. No gráfico, a linha de cada produto começa no primeiro mês com compra real (em 0%).
+
+- **Preço original retroativo (backfill)**: Apenas para a cesta básica e a inflação média: se um produto regular só passa a ter preço no meio do período, o primeiro preço conhecido é usado como preço original nos meses anteriores (contribuindo 0% de inflação). Isso mantém a composição da cesta constante em todo o período, evitando saltos artificiais quando um produto "entra" na cesta.
 
 **Exemplo de uso:**
 - Veja quanto sua cesta básica inflacionou no último ano
@@ -110,11 +114,13 @@ As queries foram otimizadas para:
 
 ## Limitações Conhecidas
 
-1. **Produtos sem histórico contínuo**: Se um produto foi comprado apenas uma vez, não aparecerá nos gráficos de inflação (requer pelo menos 2 compras)
+1. **Produtos sem histórico contínuo**: Um produto comprado apenas uma vez aparece no gráfico como linha plana em 0% a partir da primeira compra (o preço é mantido por forward fill), mas não é considerado regular — portanto não entra na inflação média nem na cesta básica
 
 2. **Mudança de marca**: Se você trocar a marca de um produto, ele pode aparecer como produto diferente. Solução: use a funcionalidade de revisão manual para padronizar o nome.
 
 3. **Produtos fracionados**: Produtos vendidos por peso (kg, g) podem ter variação de quantidade que afeta o preço médio. O sistema já calcula preço unitário (R$/kg) automaticamente.
+
+4. **Importação esparsa**: A regularidade é medida apenas sobre meses com notas importadas, então longos intervalos sem importar não desqualificam produtos. Ainda assim, quanto menos notas por mês, menos representativa fica a janela — se nenhum produto for considerado regular, a tela avisa e usa todos os produtos do top como base.
 
 ## Fórmulas de Cálculo
 
@@ -131,7 +137,7 @@ Para i > 0:
   Inflação[i] = ((1 + Inflação[i-1]/100) * (1 + variação_i/100) - 1) * 100
 ```
 
-Esta fórmula usa capitalização composta, que é o método correto para calcular inflação acumulada.
+Esta fórmula usa capitalização composta, que é o método correto para calcular inflação acumulada. Para cada produto, a acumulação começa em 0% no primeiro mês com preço disponível.
 
 ### Inflação Média
 
@@ -139,7 +145,7 @@ Esta fórmula usa capitalização composta, que é o método correto para calcul
 Inflação_Média[mês] = Soma(Inflação_Produto_Regular[mês]) / Quantidade_Produtos_Regulares
 ```
 
-Considera apenas produtos regulares para evitar distorções.
+Considera apenas produtos regulares para evitar distorções. Usa as séries com backfill: nos meses anteriores à primeira compra, o produto contribui com 0% de inflação (preço original retroativo). Se não houver nenhum produto regular, a base passa a ser todos os produtos do top (com aviso na tela); meses sem nenhum dado ficam NaN.
 
 ### Cesta Básica Personalizada
 
@@ -147,7 +153,7 @@ Considera apenas produtos regulares para evitar distorções.
 Custo_Cesta[mês] = Média(Preço_Unitário[produto, mês]) para todos produtos regulares
 ```
 
-Simplificação: assume quantidade média igual para todos produtos. Em versões futuras, pode ser ponderado pela quantidade média mensal de cada produto.
+Usa as séries com backfill, garantindo que todos os produtos regulares componham a cesta em todos os meses (composição constante, sem saltos artificiais). Simplificação: assume quantidade média igual para todos produtos. Em versões futuras, pode ser ponderado pela quantidade média mensal de cada produto.
 
 ## Solução de Problemas
 

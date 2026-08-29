@@ -54,12 +54,13 @@ Importação NFC-e → Classificação → Padronização → Analytics (preços
 
 #### Etapas do Cálculo
 
-1. **Preenchimento de meses faltantes** (`_preencher_meses_faltantes`): forward fill — último preço conhecido mantido para meses sem compra
-2. **Identificação de produtos regulares** (`_identificar_produtos_regulares`): produtos comprados em N+ meses consecutivos (padrão: 2+)
-3. **Inflação por produto**: `_calcular_inflacao_acumulada()` para cada produto individual
-4. **Inflação média**: média das inflações dos produtos regulares
-5. **Cesta básica personalizada** (`_calcular_cesta_basica_personalizada`): média simples dos custos unitários dos produtos regulares (sem ponderação por quantidade atualmente)
-6. **Inflação da cesta**: inflação acumulada sobre o custo da cesta
+1. **Preenchimento de meses faltantes** (`_preencher_meses_faltantes`): forward fill — último preço conhecido mantido para meses sem compra; meses anteriores à 1ª compra ficam NaN
+2. **Identificação de produtos regulares** (`_identificar_produtos_regulares`): avaliada sobre dados brutos de quantidade mensal (não sobre a série preenchida) — nos últimos 6 **meses ativos** do período (ou todos, se menos), nunca 2 meses seguidos sem compra (bordas incluídas); unitários exigem qtd ≥1 no mês; fracionáveis (KG/G/L/ML/MG) exigem média mensal >0,1 na janela. Meses sem nota importada (`obter_meses_com_notas`) são removidos da janela: sem esse filtro, uma lacuna de coleta de 2 meses zera a lista de regulares e achata a inflação média em 0%
+3. **Inflação por produto**: `_calcular_inflacao_acumulada()` para cada produto individual — base 0% no 1º mês com preço; NaN antes (linha começa na 1ª compra real)
+4. **Backfill para agregados** (`_aplicar_backfill`): para produtos regulares, meses anteriores à 1ª compra recebem o primeiro preço conhecido — usado apenas por inflação média e cesta
+5. **Inflação média** (`_calcular_inflacao_media`): média das inflações dos produtos regulares (séries com backfill — produto contribui 0% nos meses retro-preenchidos). Sem nenhum regular, a base vira todos os produtos do top com preço e a tela exibe aviso; mês sem dado é NaN, nunca 0%
+6. **Cesta básica personalizada** (`_calcular_cesta_basica_personalizada`): média simples dos custos unitários dos produtos regulares sobre as séries com backfill (composição constante; sem ponderação por quantidade atualmente)
+7. **Inflação da cesta**: inflação acumulada sobre o custo da cesta
 
 #### Saídas
 
@@ -93,7 +94,9 @@ Importação NFC-e → Classificação → Padronização → Analytics (preços
 | Métrica | Fórmula | Onde |
 |---------|---------|------|
 | Preço médio ponderado | Σ(valor_total) / Σ(quantidade) por produto/mês | `obter_custos_unitarios_mensais` |
-| Inflação acumulada | `(1+inf_ant)(1+var_atual)-1` | `_calcular_inflacao_acumulada` |
-| Produto regular | Comprado em ≥2 meses consecutivos | `_identificar_produtos_regulares` |
-| Cesta básica | Média simples dos custos unitários regulares | `_calcular_cesta_basica_personalizada` |
+| Inflação acumulada | `(1+inf_ant)(1+var_atual)-1`, base 0% no 1º mês com preço | `_calcular_inflacao_acumulada` |
+| Produto regular | Últimos 6 meses ativos: nunca 2 meses seguidos sem compra; unitários qtd ≥1/mês; fracionáveis média mensal >0,1 | `_identificar_produtos_regulares` |
+| Mês ativo | Mês com ao menos uma nota importada | `obter_meses_com_notas` |
+| Cesta básica | Média simples dos custos unitários regulares (séries com backfill) | `_calcular_cesta_basica_personalizada` |
 | Forward fill | Último preço conhecido mantido | `_preencher_meses_faltantes` |
+| Backfill (cesta/média) | 1º preço conhecido vale para meses anteriores à 1ª compra | `_aplicar_backfill` |

@@ -22,8 +22,12 @@ Interface web construída com Streamlit para gerenciamento de notas fiscais elet
 - Revisão de itens suporta salvar rascunho (`confirmar=False`) ou confirmar (`confirmar=True`) 🟢
 - Similaridade mínima para agrupamento: 70%, máxima: 100% 🟢
 - Consolidação de produtos requer no mínimo 2 selecionados; destino é o produto com mais itens 🟢
-- Produtos regulares para inflação: comprados em pelo menos 2 meses consecutivos 🟢
-- Meses faltantes em série temporal são preenchidos com último preço conhecido (forward fill) 🟢
+- Produtos regulares para inflação: nos últimos 6 meses **ativos** do período selecionado (ou em todos, se menos), nunca 2 meses seguidos sem compra real (bordas incluídas); produtos unitários exigem qtd ≥1 no mês; fracionáveis (KG/G/L/ML/MG) contam qualquer qtd >0, mas exigem média mensal de quantidade >0,1 na janela 🟢
+- Mês ativo = mês com ao menos uma nota importada; meses sem nota saem da janela de regularidade, para que lacuna de coleta não desqualifique todos os produtos de uma vez 🟢
+- Se nenhum produto for regular no período, a tela exibe aviso e calcula inflação média e cesta com todos os produtos do top que tenham preço; a série da média é rotulada "Inflação Média (todos os produtos)" 🟢
+- Mês sem nenhum dado na inflação média é NaN (lacuna no gráfico), nunca 0% 🟢
+- Meses faltantes em série temporal são preenchidos com último preço conhecido (forward fill); a linha de cada produto começa no 1º mês com compra real 🟢
+- Cesta básica e inflação média usam backfill: meses anteriores à 1ª compra de um produto regular recebem o primeiro preço conhecido (composição constante, 0% de inflação nos meses retro-preenchidos) 🟢
 - Período padrão de relatórios: últimos 12 meses 🟢
 - Cada produto listado tem checkbox marcado por padrão; se nenhum produto for selecionado, exibe aviso e não renderiza o gráfico 🟢
 - Inflação Média e Cesta Básica são séries opcionais controladas por checkboxes independentes 🟢
