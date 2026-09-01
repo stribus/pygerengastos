@@ -32,7 +32,7 @@ dependencies = [
     "sentence-transformers==5.4.0",
     "streamlit==1.54.0",
     "tornado>=6.5.6",
-    "transformers==5.0.0rc3",
+    "transformers==5.10.1",
 ]
 
 [project.optional-dependencies]
