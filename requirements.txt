@@ -63,7 +63,7 @@ durationpy==0.10
     # via kubernetes
 fastuuid==0.14.0
     # via litellm
-filelock==3.25.2
+filelock==4.2.1
     # via
     #   huggingface-hub
     #   torch
