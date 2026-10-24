@@ -94,6 +94,7 @@ def test_get_collection_usa_get_or_create_collection(monkeypatch):
     cliente_falso.get_or_create_collection.assert_called_once_with(
         name="produtos",
         embedding_function="embedding-fn",
+        configuration={"hnsw": {"space": "cosine"}},
     )
 
 

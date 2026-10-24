@@ -395,10 +395,10 @@ def _buscar_produto_por_descricao_similaridade(
 	if not texto:
 		return None
 	try:
-		from src.classifiers.embeddings import buscar_produtos_semelhantes
+		from src.classifiers.embeddings import SIMILARIDADE_MINIMA, buscar_produtos_semelhantes
 	except ImportError:
 		return None
-	limite = score_minimo if score_minimo is not None else _SIMILARIDADE_MINIMA
+	limite = score_minimo if score_minimo is not None else SIMILARIDADE_MINIMA
 	matches = buscar_produtos_semelhantes(texto, top_k=top_k)
 	for match in matches:
 		produto_id = match.get("produto_id")
@@ -464,8 +464,6 @@ _STOPWORDS_DESCRICAO = {
 	"EM",
 	"E",
 }
-
-_SIMILARIDADE_MINIMA = 0.82
 
 _UNIDADES_REGEX = re.compile(
 	r"\b\d+[.,]?\d*\s*(kg|g|mg|l|ml|un|und|cx|pct|pct\.|pack|lt|sache|sachê|cartela|garrafa|lata|pt|pacote)\b",

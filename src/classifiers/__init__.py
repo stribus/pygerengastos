@@ -16,7 +16,7 @@ from src.database import (
 
 from src.logger import setup_logging
 from .llm_classifier import ClassificacaoResultado, LLMClassifier
-from .embeddings import buscar_produtos_semelhantes
+from .embeddings import SIMILARIDADE_MINIMA, buscar_produtos_semelhantes
 
 logger = setup_logging("classifiers")
 
@@ -165,8 +165,8 @@ def classificar_itens_pendentes(
 			matches = buscar_produtos_semelhantes(item.descricao, top_k=1)
 			match = matches[0] if matches else None
 
-			# Se encontrou algo com alta confiança (>= 0.82)
-			if match and (match.get("score") or 0.0) >= 0.82:
+			# Se encontrou algo com alta confiança (similaridade de cosseno >= SIMILARIDADE_MINIMA)
+			if match and (match.get("score") or 0.0) >= SIMILARIDADE_MINIMA:
 				categoria = match.get("categoria")
 				# Só usa se categoria estiver preenchida
 				if categoria and categoria.strip():
