@@ -702,3 +702,20 @@ def test_classificar_itens_pendentes_avisa_itens_sem_classificacao(tmp_path):
 
 	assert len(resultados) == 1
 	assert any("2 item(ns) ficaram sem classificação" in m for m in mensagens)
+
+
+def test_item_com_categoria_vazia_vai_para_o_proximo_modelo(monkeypatch):
+	"""Categoria em branco na resposta conta como item sem resposta, não como classificado."""
+	_preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: json.dumps(
+			{"itens": [{"sequencia": 1, "categoria": "Alimentos"}, {"sequencia": 2, "categoria": "   "}]}
+		),
+		"modelo-b": lambda chave, seqs: _json_itens(seqs, "Limpeza"),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1), _item(2)], model_priority=["modelo-a", "modelo-b"]
+	)
+
+	assert {(r.sequencia, r.categoria) for r in resultados} == {(1, "Alimentos"), (2, "Limpeza")}
