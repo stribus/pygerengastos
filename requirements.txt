@@ -219,7 +219,7 @@ pandas==2.3.3
     # via
     #   gerenciador-de-despesa (pyproject.toml)
     #   streamlit
-pillow==12.2.0
+pillow==12.3.0
     # via streamlit
 pluggy==1.6.0
     # via pytest
