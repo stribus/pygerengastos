@@ -506,3 +506,199 @@ def test_extra_body_nao_passado_quando_nao_configurado():
 		
 		# Verificar que model foi passado explicitamente
 		assert call_args.kwargs["model"] == "gemini/gemini-2.5-flash-lite"
+
+
+# ---------------------------------------------------------------------------
+# Itens omitidos pela resposta do LLM e fallback entre modelos
+# ---------------------------------------------------------------------------
+
+def _item(sequencia: int, chave: str = "CHAVE_A") -> ItemParaClassificacao:
+	return ItemParaClassificacao(
+		chave_acesso=chave,
+		sequencia=sequencia,
+		descricao=f"Item {sequencia} de {chave}",
+		codigo=None,
+		quantidade=Decimal("1"),
+		unidade="UN",
+		valor_unitario=Decimal("1.00"),
+		valor_total=Decimal("1.00"),
+		categoria_sugerida=None,
+		categoria_confirmada=None,
+		emitente_nome="Mercado",
+		emissao_iso="2025-01-10T10:00:00",
+	)
+
+
+def _preparar_modelos(monkeypatch, respostas, *, max_itens: int = MAX_ITENS_POR_CHAMADA):
+	"""Simula modelos por nome; ``respostas[modelo](chave, sequencias)`` devolve o conteúdo.
+
+	A função de resposta pode lançar exceção para simular falha da API. Retorna a
+	lista de chamadas feitas: (modelo, chave, [sequencias]).
+	"""
+	chamadas: list[tuple[str, str, list[int]]] = []
+
+	def _fake_config(self, modelo):  # type: ignore[override]
+		return ModeloConfig(nome=modelo, api_key_env="X", max_tokens=100, max_itens=max_itens, timeout=1.0)
+
+	def _fake_montar_payload(self, itens_bloco):  # type: ignore[override]
+		return {"chaves": [i.chave_acesso for i in itens_bloco], "seqs": [i.sequencia for i in itens_bloco]}
+
+	def _fake_executar(self, payload, *, config, api_key):  # type: ignore[override]
+		chave = payload["chaves"][0]
+		chamadas.append((config.nome, chave, list(payload["seqs"])))
+		conteudo = respostas[config.nome](chave, payload["seqs"])
+		return conteudo, {"choices": [{"message": {"content": conteudo}}]}
+
+	monkeypatch.setattr(LLMClassifier, "_obter_config_modelo", _fake_config)
+	monkeypatch.setattr(LLMClassifier, "_obter_api_key", lambda self, config: "chave-fake")
+	monkeypatch.setattr(LLMClassifier, "_montar_payload", _fake_montar_payload)
+	monkeypatch.setattr(LLMClassifier, "_executar_chamada", _fake_executar)
+	return chamadas
+
+
+def _json_itens(sequencias, categoria: str = "Alimentos") -> str:
+	return json.dumps({"itens": [{"sequencia": s, "categoria": categoria} for s in sequencias]})
+
+
+def test_item_omitido_pela_resposta_vai_para_o_proximo_modelo(monkeypatch):
+	"""Regressão: itens ausentes na resposta eram descartados e o fallback nunca rodava."""
+	chamadas = _preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: _json_itens([1]),
+		"modelo-b": lambda chave, seqs: _json_itens(seqs, "Limpeza"),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1), _item(2), _item(3)], model_priority=["modelo-a", "modelo-b"]
+	)
+
+	assert {(r.sequencia, r.categoria) for r in resultados} == {
+		(1, "Alimentos"), (2, "Limpeza"), (3, "Limpeza"),
+	}
+	assert chamadas[-1] == ("modelo-b", "CHAVE_A", [2, 3])
+	assert classifier.itens_nao_classificados == []
+
+
+def test_resposta_sem_itens_manda_bloco_inteiro_ao_proximo_modelo(monkeypatch):
+	"""Resposta JSON válida mas sem a chave "itens" não pode ser tratada como sucesso."""
+	_preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: json.dumps({"resultado": "ok"}),
+		"modelo-b": lambda chave, seqs: _json_itens(seqs),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1), _item(2)], model_priority=["modelo-a", "modelo-b"]
+	)
+
+	assert sorted(r.sequencia for r in resultados) == [1, 2]
+	assert all(r.modelo == "modelo-b" for r in resultados)
+
+
+def test_ultimo_modelo_omite_itens_salva_parcial_e_informa_pendentes(monkeypatch):
+	"""Esgotados os modelos, devolve o que foi classificado e expõe os pendentes."""
+	_preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: _json_itens([1]),
+		"modelo-b": lambda chave, seqs: _json_itens([2]),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1), _item(2), _item(3)], model_priority=["modelo-a", "modelo-b"]
+	)
+
+	assert sorted(r.sequencia for r in resultados) == [1, 2]
+	assert [i.sequencia for i in classifier.itens_nao_classificados] == [3]
+
+
+def test_nenhum_item_classificado_por_nenhum_modelo_lanca_erro(monkeypatch):
+	"""Sem nenhum resultado, a falha continua visível como exceção."""
+	_preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: _json_itens([]),
+		"modelo-b": lambda chave, seqs: _json_itens([]),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	with pytest.raises(RuntimeError):
+		classifier.classificar_itens([_item(1)], model_priority=["modelo-a", "modelo-b"])
+
+
+def test_erro_em_bloco_intermediario_preserva_resultados_dos_blocos_anteriores(monkeypatch):
+	"""Uma exceção no 2º bloco não pode descartar o que o 1º bloco já classificou."""
+	def _modelo_a(chave, seqs):
+		if seqs == [3, 4]:
+			raise RuntimeError("timeout simulado")
+		return _json_itens(seqs)
+
+	chamadas = _preparar_modelos(
+		monkeypatch,
+		{"modelo-a": _modelo_a, "modelo-b": lambda chave, seqs: _json_itens(seqs, "Limpeza")},
+		max_itens=2,
+	)
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1), _item(2), _item(3), _item(4)], model_priority=["modelo-a", "modelo-b"]
+	)
+
+	assert {(r.sequencia, r.categoria) for r in resultados} == {
+		(1, "Alimentos"), (2, "Alimentos"), (3, "Limpeza"), (4, "Limpeza"),
+	}
+	assert ("modelo-b", "CHAVE_A", [3, 4]) in chamadas
+
+
+def test_itens_de_notas_diferentes_nao_dividem_o_mesmo_bloco(monkeypatch):
+	"""A resposta é mapeada por sequência; misturar notas faria a #1 de uma receber a da outra."""
+	chamadas = _preparar_modelos(monkeypatch, {
+		"modelo-a": lambda chave, seqs: _json_itens(seqs, f"Categoria {chave}"),
+	})
+	classifier = LLMClassifier(api_key="fake")
+
+	resultados = classifier.classificar_itens(
+		[_item(1, "NOTA_X"), _item(1, "NOTA_Y"), _item(2, "NOTA_X")],
+		model_priority=["modelo-a"],
+	)
+
+	assert {(r.chave_acesso, r.sequencia, r.categoria) for r in resultados} == {
+		("NOTA_X", 1, "Categoria NOTA_X"),
+		("NOTA_X", 2, "Categoria NOTA_X"),
+		("NOTA_Y", 1, "Categoria NOTA_Y"),
+	}
+	assert sorted((chave, tuple(seqs)) for _, chave, seqs in chamadas) == [
+		("NOTA_X", (1, 2)), ("NOTA_Y", (1,)),
+	]
+
+
+def test_classificar_itens_pendentes_avisa_itens_sem_classificacao(tmp_path):
+	"""Quando o LLM deixa itens sem resposta, o progresso informa quantos ficaram pendentes."""
+	nota = receita_rs.parse_nota(FIXTURE_HTML.read_text(encoding="utf-8"), FIXTURE_CHAVE)
+	_salvar_para_tmp(tmp_path, nota)
+
+	class FakeLLMParcial(LLMClassifier):  # type: ignore[misc]
+		def __init__(self):  # pylint: disable=super-init-not-called
+			self.model = "fake"
+			self.itens_nao_classificados = []
+
+		def classificar_itens(self, itens, *, model_priority=None, progress_callback=None):
+			self.itens_nao_classificados = list(itens[1:])
+			item = itens[0]
+			return [
+				ClassificacaoResultado(
+					chave_acesso=item.chave_acesso,
+					sequencia=item.sequencia,
+					categoria="alimentacao",
+					modelo="fake",
+				)
+			]
+
+	mensagens: list[str] = []
+	with patch("src.classifiers.buscar_produtos_semelhantes", return_value=[]):
+		resultados = classificar_itens_pendentes(
+			classifier=cast(LLMClassifier, FakeLLMParcial()),
+			db_path=tmp_path / "tmp.db",
+			limit=3,
+			progress_callback=mensagens.append,
+		)
+
+	assert len(resultados) == 1
+	assert any("2 item(ns) ficaram sem classificação" in m for m in mensagens)

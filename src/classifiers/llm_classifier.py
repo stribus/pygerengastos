@@ -295,12 +295,14 @@ class FalhaModeloError(RuntimeError):
 		motivo: str,
 		itens_restantes: list[ItemParaClassificacao],
 		causa: Exception | None = None,
+		resultados_parciais: list[ClassificacaoResultado] | None = None,
 	):
 		super().__init__(motivo)
 		self.modelo = modelo
 		self.motivo = motivo
 		self.itens_restantes = itens_restantes
 		self.causa = causa
+		self.resultados_parciais = resultados_parciais or []
 
 
 @dataclass(frozen=True)
@@ -370,6 +372,8 @@ class LLMClassifier:
 		self.categorias_disponiveis = [cat for cat in (categorias or []) if cat]
 		self._model_priority = list(model_priority) if model_priority else [self.model]
 		self._api_key_override: dict[str, str] = {}
+		# Itens que nenhum modelo classificou na última chamada de classificar_itens
+		self.itens_nao_classificados: list[ItemParaClassificacao] = []
 		if api_key:
 			self._api_key_override[self.model] = api_key
 
@@ -386,6 +390,7 @@ class LLMClassifier:
 		model_priority: Sequence[str] | None = None,
 		progress_callback: Callable[[str], None] | None = None,
 	) -> list[ClassificacaoResultado]:
+		self.itens_nao_classificados = []
 		if not itens:
 			return []
 
@@ -393,12 +398,13 @@ class LLMClassifier:
 		itens_pendentes = list(itens)
 		falhas: list[FalhaModelo] = []
 		limite_anterior: int | None = None
+		ultima_causa: Exception | None = None
 
 		ordem_modelos = self._resolver_model_priority(model_priority)
 		if not ordem_modelos:
 			raise RuntimeError("Nenhum modelo configurado para classificação.")
 
-		for indice_modelo, modelo in enumerate(ordem_modelos):
+		for modelo in ordem_modelos:
 			config = self._obter_config_modelo(modelo)
 			api_key = self._obter_api_key(config)
 			if not api_key:
@@ -441,10 +447,10 @@ class LLMClassifier:
 					progress_callback,
 					f"Falha com {exc.modelo}: {exc.motivo}. Tentando próximo modelo...",
 				)
+				resultados.extend(exc.resultados_parciais)
 				itens_pendentes = exc.itens_restantes
 				limite_anterior = limite_em_uso
-				if indice_modelo == len(ordem_modelos) - 1 and exc.causa is not None:
-					raise exc.causa
+				ultima_causa = exc.causa
 				continue
 
 			resultados.extend(resultados_modelo)
@@ -452,13 +458,31 @@ class LLMClassifier:
 			if not itens_pendentes:
 				return resultados
 
+			# Resposta válida, mas incompleta: os itens omitidos vão para o próximo modelo
+			falhas.append(FalhaModelo(modelo=modelo, motivo=f"{len(itens_pendentes)} item(ns) sem resposta"))
+			logger.warning("Modelo %s não classificou %s item(ns)", modelo, len(itens_pendentes))
+			self._emitir_progresso(
+				progress_callback,
+				f"{modelo} não classificou {len(itens_pendentes)} item(ns). Tentando próximo modelo...",
+			)
+
 		if itens_pendentes:
 			resumo = "; ".join(f"{falha.modelo}={falha.motivo}" for falha in falhas)
 			if not resumo:
 				resumo = "nenhuma tentativa executada"
-			raise RuntimeError(
-				f"Falha ao classificar itens após tentar todos os modelos. {resumo}"
+			if not resultados:
+				if ultima_causa is not None:
+					raise ultima_causa
+				raise RuntimeError(
+					f"Falha ao classificar itens após tentar todos os modelos. {resumo}"
+				)
+			# Salva o que foi classificado e deixa os demais pendentes para revisão
+			logger.warning(
+				"%s item(ns) ficaram sem classificação após tentar todos os modelos. %s",
+				len(itens_pendentes),
+				resumo,
 			)
+			self.itens_nao_classificados = itens_pendentes
 
 		return resultados
 
@@ -506,35 +530,36 @@ class LLMClassifier:
 			return [], []
 
 		resultados: list[ClassificacaoResultado] = []
-		for inicio in range(0, len(lista_itens), max_itens):
-			bloco = lista_itens[inicio : inicio + max_itens]
+		nao_classificados: list[ItemParaClassificacao] = []
+		blocos = list(_dividir_em_blocos(lista_itens, max_itens))
+		for indice_bloco, bloco in enumerate(blocos):
 			try:
 				payload = self._montar_payload(bloco)
 				conteudo, resposta_raw = self._executar_chamada(payload, config=config, api_key=api_key)
 				mapeamento = self._interpretar_resposta(conteudo)
-				if not mapeamento:
-					continue
-			except Exception as exc:  # pragma: no cover - comportamento coberto indiretamente
-				restantes = lista_itens[inicio:]
+			except Exception as exc:
+				restantes = nao_classificados + [item for b in blocos[indice_bloco:] for item in b]
 				motivo = _resumir_erro(exc)
 				raise FalhaModeloError(
 					modelo=config.nome,
 					motivo=motivo,
 					itens_restantes=restantes,
 					causa=exc,
+					resultados_parciais=resultados,
 				) from exc
 
 			resposta_json = json.dumps(
-				{"chunk": (inicio // max_itens) + 1, "payload": payload, "resposta": resposta_raw},
+				{"chunk": indice_bloco + 1, "payload": payload, "resposta": resposta_raw},
 				ensure_ascii=False,
 			)
 
+			# Item sem resposta ou com categoria inválida (inclusive bloco inteiro com
+			# mapeamento vazio) volta como pendente para o próximo modelo
 			for item in bloco:
 				resposta = mapeamento.get(item.sequencia)
-				if resposta is None:
-					continue
-				categoria = _normalizar_categoria(resposta.categoria)
+				categoria = _normalizar_categoria(resposta.categoria) if resposta else None
 				if not categoria:
+					nao_classificados.append(item)
 					continue
 				resultados.append(
 					ClassificacaoResultado(
@@ -551,7 +576,7 @@ class LLMClassifier:
 					)
 				)
 
-		return resultados, []
+		return resultados, nao_classificados
 
 	def _executar_chamada(
 		self,
@@ -784,8 +809,16 @@ def _definir_origem_modelo(modelo: str) -> str:
 def _dividir_em_blocos(
 	itens: Sequence[ItemParaClassificacao], tamanho_bloco: int
 ) -> Iterable[Sequence[ItemParaClassificacao]]:
+	"""Divide os itens em blocos de até ``tamanho_bloco``, um conjunto por nota.
+
+	A resposta do LLM é mapeada só pela sequência, que se repete entre notas;
+	por isso um bloco nunca mistura itens de chaves de acesso diferentes.
+	"""
 	if tamanho_bloco <= 0:
 		raise ValueError("tamanho_bloco precisa ser positivo")
-	lista_itens = list(itens)
-	for inicio in range(0, len(lista_itens), tamanho_bloco):
-		yield lista_itens[inicio : inicio + tamanho_bloco]
+	por_nota: dict[str, list[ItemParaClassificacao]] = {}
+	for item in itens:
+		por_nota.setdefault(item.chave_acesso, []).append(item)
+	for itens_nota in por_nota.values():
+		for inicio in range(0, len(itens_nota), tamanho_bloco):
+			yield itens_nota[inicio : inicio + tamanho_bloco]
