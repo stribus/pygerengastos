@@ -29,6 +29,7 @@ from src.ui.relatorios import (
     _gerar_meses_periodo,
     _identificar_produtos_regulares,
     _montar_series_inflacao,
+    _montar_tabela_composicao_cesta,
     _preencher_meses_faltantes,
 )
 
@@ -845,3 +846,41 @@ def test_alinhamento_com_meses_ordenados():
     assert abs(serie_a[meses.index("2025-02")] - 0.0) < 0.01
     assert abs(serie_a[meses.index("2025-03")] - 10.0) < 0.01
     assert abs(serie_a[meses.index("2025-04")] - 10.0) < 0.01  # ffill mantém preço
+
+
+# ---------------------------------------------------------------------------
+# _montar_tabela_composicao_cesta (tabela "Composição da Cesta Básica")
+# ---------------------------------------------------------------------------
+
+def test_composicao_cesta_inclui_produtos_do_fallback():
+    """No fallback (nenhum regular), a tabela usa os mesmos produtos do gráfico.
+
+    Regressão: o preço médio era filtrado por `produtos_regulares`, vazio no
+    fallback; o merge com as quantidades saía vazio e o total virava R$ 0,00.
+    """
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "custo_unitario_medio": 4.0},
+    ]
+    quantidades = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "quantidade_total": 2.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "quantidade_total": 3.0},
+    ]
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-01-31")
+
+    tabela = _montar_tabela_composicao_cesta(
+        quantidades, df_completo, ["A", "B"], {"A": "UN", "B": "UN"}
+    )
+
+    assert sorted(tabela["Produto"]) == ["A", "B"]
+    assert abs(tabela["Custo Mensal Médio"].sum() - (2 * 10.0 + 3 * 4.0)) < 0.01
+
+
+def test_composicao_cesta_sem_quantidades_retorna_vazio():
+    """Sem quantidades para os produtos da cesta, a tabela sai vazia."""
+    custos = [{"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0}]
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-01-31")
+
+    tabela = _montar_tabela_composicao_cesta([], df_completo, ["A"], {"A": "UN"})
+
+    assert tabela.empty
