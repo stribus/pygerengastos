@@ -74,6 +74,7 @@ class NotaFiscal:
     total_itens: Optional[int] = None
     valor_total: Optional[Decimal] = None
     valor_pago: Optional[Decimal] = None
+    desconto: Optional[Decimal] = None
     pagamentos: List[Pagamento] = field(default_factory=list)
     tributos: Optional[Decimal] = None
     consumidor_cpf: Optional[str] = None
@@ -266,7 +267,14 @@ def parse_nfce_html(html: str) -> NotaFiscal:
     itens = _parse_itens(soup)
     numero_itens = _parse_numero_itens(soup)
     numero, serie, emissao = _parse_informacoes_gerais(soup)
-    valor_total, tributos, formas = _parse_blocos_totais(soup)
+    valor_total, tributos, formas, desconto = _parse_blocos_totais(soup)
+
+    # Layout tabular (NFCDetalhe_Item) não tem #totalNota: o valor da nota é o
+    # total bruto menos o desconto, igual ao "Valor a pagar" do layout moderno
+    if valor_total is None and not formas:
+        total_bruto, desconto, formas = _parse_totais_tabular(soup)
+        if total_bruto is not None:
+            valor_total = total_bruto - (desconto or Decimal("0"))
 
     if valor_total is None:
         valor_total = sum((item.valor_total for item in itens), Decimal("0"))
@@ -291,6 +299,7 @@ def parse_nfce_html(html: str) -> NotaFiscal:
         total_itens=numero_itens,
         valor_total=valor_total,
         valor_pago=valor_pago,
+        desconto=desconto,
         pagamentos=pagamentos,
         tributos=tributos,
         consumidor_cpf=consumidor_cpf,
@@ -565,16 +574,27 @@ def _parse_numero_itens(soup: BeautifulSoup) -> Optional[int]:
     return None
 
 
-def _parse_blocos_totais(soup: BeautifulSoup) -> tuple[Optional[Decimal], Optional[Decimal], Dict[str, Decimal]]:
+def _parse_blocos_totais(
+    soup: BeautifulSoup,
+) -> tuple[Optional[Decimal], Optional[Decimal], Dict[str, Decimal], Optional[Decimal]]:
+    """Lê o bloco #totalNota do layout moderno.
+
+    Retorna (valor a pagar, tributos, formas de pagamento, desconto). Só as
+    linhas após "Forma de pagamento" são pagamentos; "Valor total",
+    "Descontos" e "Troco" não entram nas formas.
+    """
     total: Optional[Decimal] = None
     tributos: Optional[Decimal] = None
+    desconto: Optional[Decimal] = None
     formas: Dict[str, Decimal] = {}
+    apos_forma_pagamento = False
     for bloco in soup.select("#totalNota > div"):
         label = bloco.find("label")
         span = bloco.find("span", class_="totalNumb")
         if not label or not span:
             continue
         texto_label = label.get_text(strip=True)
+        rotulo = texto_label.lower()
         if "Valor a pagar" in texto_label:
             total = _decimal_from_string(span.get_text())
             continue
@@ -584,10 +604,53 @@ def _parse_blocos_totais(soup: BeautifulSoup) -> tuple[Optional[Decimal], Option
             except ValueError:
                 pass
             continue
-        if texto_label and not texto_label.startswith("Qtd") and not texto_label.startswith("Forma de pagamento"):
+        if rotulo.startswith("forma de pagamento"):
+            apos_forma_pagamento = True
+            continue
+        if rotulo.startswith("desconto"):
+            desconto = _decimal_from_string(span.get_text())
+            continue
+        if apos_forma_pagamento and texto_label and not rotulo.startswith("troco"):
             try:
                 valor = _decimal_from_string(span.get_text())
             except ValueError:
                 continue
             formas[texto_label] = valor
-    return total, tributos, formas
+    return total, tributos, formas, desconto
+
+
+def _parse_totais_tabular(
+    soup: BeautifulSoup,
+) -> tuple[Optional[Decimal], Optional[Decimal], Dict[str, Decimal]]:
+    """Lê os totais do layout tabular (pares rótulo/valor em td.NFCDetalhe_Item).
+
+    Retorna (valor total bruto, desconto, formas de pagamento). As formas são
+    as linhas após o cabeçalho "FORMA PAGAMENTO", exceto "Troco".
+    """
+    total_bruto: Optional[Decimal] = None
+    desconto: Optional[Decimal] = None
+    formas: Dict[str, Decimal] = {}
+    apos_forma_pagamento = False
+    for linha in soup.select("tr"):
+        if str(linha.get("id", "")).startswith("Item"):
+            continue
+        tds = linha.find_all("td", recursive=False)
+        if len(tds) != 2 or not all("NFCDetalhe_Item" in (td.get("class") or []) for td in tds):
+            continue
+        texto_label = tds[0].get_text(" ", strip=True)
+        rotulo = texto_label.lower()
+        texto_valor = tds[1].get_text(strip=True)
+        if rotulo.startswith("forma pagamento") or rotulo.startswith("forma de pagamento"):
+            apos_forma_pagamento = True
+            continue
+        try:
+            valor = _decimal_from_string(texto_valor)
+        except ValueError:
+            continue
+        if rotulo.startswith("valor total"):
+            total_bruto = valor
+        elif "desconto" in rotulo:
+            desconto = valor
+        elif apos_forma_pagamento and texto_label and not rotulo.startswith("troco"):
+            formas[texto_label] = valor
+    return total_bruto, desconto, formas
