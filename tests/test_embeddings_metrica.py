@@ -167,3 +167,24 @@ def test_metrica_desconhecida_e_rejeitada():
 	"""Métrica fora de cosine/l2/ip não pode virar um score com significado errado."""
 	with pytest.raises(ValueError, match="não suportada"):
 		embeddings._distancia_para_similaridade(0.1, "manhattan")
+
+
+class _ColecaoFalsa:
+	def __init__(self, configuration=None, metadata=None):
+		self.configuration = configuration
+		self.metadata = metadata
+
+
+@pytest.mark.parametrize(
+	("colecao", "esperado"),
+	[
+		(_ColecaoFalsa(configuration={"hnsw": {"space": "cosine"}}), "cosine"),
+		# Chroma 0.x gravava a métrica no metadado, não na configuração
+		(_ColecaoFalsa(configuration={"hnsw": {}}, metadata={"hnsw:space": "cosine"}), "cosine"),
+		(_ColecaoFalsa(metadata={"hnsw:space": "ip"}), "ip"),
+		# Sem métrica declarada, o Chroma usa l2
+		(_ColecaoFalsa(), "l2"),
+	],
+)
+def test_espaco_da_colecao_le_configuracao_metadado_e_padrao(colecao, esperado):
+	assert embeddings._espaco_da_colecao(colecao) == esperado

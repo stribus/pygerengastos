@@ -269,10 +269,17 @@ def _get_collection():
 
 
 def _espaco_da_colecao(colecao) -> str:
-    """Métrica efetiva do índice da coleção ("cosine", "l2" ou "ip")."""
+    """Métrica efetiva do índice da coleção ("cosine", "l2" ou "ip").
+
+    Ordem de consulta: configuração da coleção (Chroma 1.x), metadado
+    "hnsw:space" (como o Chroma 0.x gravava) e, sem nenhuma das duas, "l2",
+    que é o padrão do próprio Chroma para índices sem métrica declarada.
+    """
     configuracao = getattr(colecao, "configuration", None) or {}
-    hnsw = configuracao.get("hnsw") or {}
-    return hnsw.get("space") or "l2"
+    espaco = (configuracao.get("hnsw") or {}).get("space")
+    if not espaco:
+        espaco = (getattr(colecao, "metadata", None) or {}).get("hnsw:space")
+    return espaco or "l2"
 
 
 def _distancia_para_similaridade(distancia: float, espaco: str) -> float:
