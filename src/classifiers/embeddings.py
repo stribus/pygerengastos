@@ -23,6 +23,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CHROMA_PERSIST_DIR = _PROJECT_ROOT / "data" / "chroma"
 # Diretório persistente compartilhado entre execuções para cache dos modelos da Hugging Face.
 _EMBEDDINGS_CACHE_DIR = _PROJECT_ROOT / "cache" / "huggingface"
+# Métrica do índice HNSW. Declarada explicitamente: no Chroma 1.x o padrão vem da
+# função de embedding (cosine para SentenceTransformer), mas o Chroma 0.x usava l2.
+_ESPACO_METRICA = "cosine"
+# Similaridade de cosseno mínima para reaproveitar uma classificação do cache semântico
+SIMILARIDADE_MINIMA = 0.82
 
 _chroma_client: ClientAPI | None = None
 _embedding_function: embedding_functions.EmbeddingFunction | None = None
@@ -32,6 +37,8 @@ _sentence_model: SentenceTransformer | None = None
 _client_lock = threading.Lock()
 _embedding_function_lock = threading.Lock()
 _sentence_model_lock = threading.Lock()
+# Métricas diferentes de cosseno já avisadas no log (evita repetir o aviso a cada busca)
+_espacos_avisados: set[str] = set()
 
 
 logger = setup_logging(__name__)
@@ -257,7 +264,39 @@ def _get_collection():
     return client.get_or_create_collection(
         name=_CHROMA_COLLECTION_NAME,
         embedding_function=_get_embedding_function(),
+        configuration={"hnsw": {"space": _ESPACO_METRICA}},
     )
+
+
+def _espaco_da_colecao(colecao) -> str:
+    """Métrica efetiva do índice da coleção ("cosine", "l2" ou "ip").
+
+    Ordem de consulta: configuração da coleção (Chroma 1.x), metadado
+    "hnsw:space" (como o Chroma 0.x gravava) e, sem nenhuma das duas, "l2",
+    que é o padrão do próprio Chroma para índices sem métrica declarada.
+    """
+    configuracao = getattr(colecao, "configuration", None) or {}
+    espaco = (configuracao.get("hnsw") or {}).get("space")
+    if not espaco:
+        espaco = (getattr(colecao, "metadata", None) or {}).get("hnsw:space")
+    return espaco or "l2"
+
+
+def _distancia_para_similaridade(distancia: float, espaco: str) -> float:
+    """Converte a distância do Chroma em similaridade de cosseno (0.0 a 1.0).
+
+    - cosine: distância = 1 − cos
+    - ip: distância = 1 − <a, b>, igual ao cosseno para vetores unitários
+    - l2: distância = ‖a − b‖² = 2 − 2·cos para vetores unitários
+      (o modelo all-MiniLM-L6-v2 gera vetores normalizados)
+    """
+    if espaco == "l2":
+        similaridade = 1.0 - distancia / 2.0
+    elif espaco in ("cosine", "ip"):
+        similaridade = 1.0 - distancia
+    else:
+        raise ValueError(f"Métrica de distância não suportada: {espaco!r}")
+    return max(0.0, similaridade)
 
 
 def gerar_embedding(texto: str) -> List[float]:
@@ -339,13 +378,22 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
         - marca_base: Marca do produto
         - categoria: Categoria validada
         - produto_id: ID do produto (se disponível)
-        - score: Similaridade (0.0 a 1.0)
+        - score: Similaridade de cosseno (0.0 a 1.0), qualquer que seja a métrica do índice
     """
     texto = descricao.strip()
     if not texto:
         return []
 
     collection = _get_collection()
+    espaco = _espaco_da_colecao(collection)
+    if espaco != _ESPACO_METRICA and espaco not in _espacos_avisados:
+        _espacos_avisados.add(espaco)
+        logger.warning(
+            "Coleção '%s' usa a métrica '%s' (esperado '%s'); o score é convertido para cosseno.",
+            _CHROMA_COLLECTION_NAME,
+            espaco,
+            _ESPACO_METRICA,
+        )
     resultados = collection.query(
         query_texts=[texto],
         n_results=top_k,
@@ -361,7 +409,7 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
     linha_distancias = distancias[0]
     linha_metadatas = metadatas[0] if metadatas and metadatas[0] else [{} for _ in linha_distancias]
     for distancia, metadata in zip(linha_distancias, linha_metadatas):
-        similaridade = max(0.0, 1.0 - distancia)
+        similaridade = _distancia_para_similaridade(distancia, espaco)
 
         # Extrai produto_id (pode ser string vazia)
         produto_id_str = metadata.get("produto_id", "")
