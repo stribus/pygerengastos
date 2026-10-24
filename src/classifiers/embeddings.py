@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from pathlib import Path
@@ -42,6 +43,23 @@ _espacos_avisados: set[str] = set()
 
 
 logger = setup_logging(__name__)
+
+
+class _FiltroAliasPathTransformers(logging.Filter):
+    """Descarta o aviso do transformers disparado pelo watcher do Streamlit.
+
+    A partir do transformers 5.10, os módulos `image_processing_*_fast` são aliases
+    de compatibilidade que avisam a cada atributo acessado. O watcher de arquivos do
+    Streamlit consulta `__path__` em todos os módulos após cada execução do script,
+    gerando ~180 avisos por execução. Só esse acesso é silenciado; o uso real de uma
+    classe `*Fast` continua avisando.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith("Accessing `__path__` from ")
+
+
+logging.getLogger("transformers").addFilter(_FiltroAliasPathTransformers())
 
 
 class ErroInicializacaoEmbeddings(RuntimeError):
