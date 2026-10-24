@@ -93,6 +93,7 @@ _SCHEMA_DEFINITIONS: tuple[str, ...] = (
 		total_itens INTEGER,
 		valor_total DECIMAL(18, 2),
 		valor_pago DECIMAL(18, 2),
+		desconto DECIMAL(18, 2),
 		tributos DECIMAL(18, 2),
 		consumidor_cpf TEXT,
 		consumidor_nome TEXT,
@@ -641,6 +642,7 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		"ALTER TABLE notas ADD COLUMN estabelecimento_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
+		"ALTER TABLE notas ADD COLUMN desconto DECIMAL(18, 2)",
 	]
 
 	for migration in migrations:
@@ -692,6 +694,34 @@ def salvar_nota(nota: NotaFiscal, *, db_path: Path | str | None = None) -> None:
 		except Exception:
 			con.execute("ROLLBACK")
 			raise
+
+
+def atualizar_totais_nota(nota: NotaFiscal, *, db_path: Path | str | None = None) -> bool:
+	"""Atualiza só valor_total, desconto, valor_pago e pagamentos de uma nota já gravada.
+
+	Ao contrário de salvar_nota, não recria os itens: preserva classificações,
+	produtos e revisões. Usado para reprocessar totais de notas antigas a partir
+	do HTML salvo. Retorna False (sem gravar nada) se a nota não existir.
+	"""
+	with conexao(db_path) as con:
+		cursor = con.execute(
+			"""
+			UPDATE notas
+			SET valor_total = ?, desconto = ?, valor_pago = ?, atualizado_em = CURRENT_TIMESTAMP
+			WHERE chave_acesso = ?
+			""",
+			[
+				_decimal_para_str(nota.valor_total),
+				_decimal_para_str(nota.desconto),
+				_decimal_para_str(nota.valor_pago),
+				nota.chave_acesso,
+			],
+		)
+		if cursor.rowcount == 0:
+			return False
+		con.execute("DELETE FROM pagamentos WHERE chave_acesso = ?", [nota.chave_acesso])
+		_persistir_pagamentos(con, nota.chave_acesso, nota.pagamentos)
+	return True
 
 
 def remover_nota(chave_acesso: str, *, db_path: Path | str | None = None) -> bool:
@@ -758,7 +788,8 @@ def carregar_nota(
 				valor_pago,
 				tributos,
 				consumidor_cpf,
-				consumidor_nome
+				consumidor_nome,
+				desconto
 			FROM notas
 			WHERE chave_acesso = ?
 			""",
@@ -815,6 +846,7 @@ def carregar_nota(
 		tributos=_para_decimal(nota_row[11]),
 		consumidor_cpf=nota_row[12],
 		consumidor_nome=nota_row[13],
+		desconto=_para_decimal(nota_row[14]),
 		pagamentos=pagamentos,
 	)
 
@@ -1594,8 +1626,9 @@ def _persistir_nota(con: sqlite3.Connection, nota: NotaFiscal) -> None:
 			valor_pago,
 			tributos,
 			consumidor_cpf,
-			consumidor_nome
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			consumidor_nome,
+			desconto
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (chave_acesso) DO UPDATE SET
 			emitente_nome = excluded.emitente_nome,
 			emitente_cnpj = excluded.emitente_cnpj,
@@ -1612,6 +1645,7 @@ def _persistir_nota(con: sqlite3.Connection, nota: NotaFiscal) -> None:
 			tributos = excluded.tributos,
 			consumidor_cpf = excluded.consumidor_cpf,
 			consumidor_nome = excluded.consumidor_nome,
+			desconto = excluded.desconto,
 			atualizado_em = CURRENT_TIMESTAMP
 		""",
 		[
@@ -1631,6 +1665,7 @@ def _persistir_nota(con: sqlite3.Connection, nota: NotaFiscal) -> None:
 			_decimal_para_str(nota.tributos),
 			nota.consumidor_cpf,
 			nota.consumidor_nome,
+			_decimal_para_str(nota.desconto),
 		],
 	)
 

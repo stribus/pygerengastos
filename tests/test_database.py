@@ -1,8 +1,11 @@
+import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from src.database import (
+    atualizar_totais_nota,
     carregar_nota,
     conexao,
     inicializar_banco,
@@ -699,3 +702,78 @@ def test_limpar_classificacoes_completas_sem_classificacoes(tmp_path):
     # Ainda deve atualizar todos os itens (mesmo que já estejam NULL)
     # porque a query não filtra por campos NOT NULL
     assert rows_atualizadas == len(nota.itens)
+
+
+FIXTURE_TABULAR = Path(__file__).resolve().parent / "fixtures" / "nfce_tabular_com_desconto.html"
+CHAVE_TABULAR = "43251193015006002590651030000000010000000010"
+
+
+def test_salvar_e_carregar_nota_preserva_desconto_e_pagamentos(tmp_path):
+    """A nota tabular é gravada com valor líquido, desconto e formas de pagamento."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = receita_rs.parse_nota(FIXTURE_TABULAR.read_text(encoding="utf-8"), CHAVE_TABULAR)
+
+    salvar_nota(nota, db_path=db_path)
+    carregada = carregar_nota(CHAVE_TABULAR, db_path=db_path)
+
+    assert carregada is not None
+    assert carregada.valor_total == Decimal("1014.52")
+    assert carregada.desconto == Decimal("52.92")
+    assert carregada.valor_pago == Decimal("1014.52")
+    assert sorted(p.valor for p in carregada.pagamentos) == [Decimal("400.00"), Decimal("614.52")]
+
+
+def test_banco_antigo_ganha_coluna_desconto(tmp_path):
+    """Bancos criados antes da coluna notas.desconto são migrados ao abrir a conexão."""
+    db_path = tmp_path / "antigo.sqlite3"
+    with sqlite3.connect(db_path) as con:
+        con.execute("CREATE TABLE notas (chave_acesso VARCHAR PRIMARY KEY, valor_total DECIMAL(18, 2))")
+
+    with conexao(db_path) as con:
+        colunas = {linha[1] for linha in con.execute("PRAGMA table_info(notas)")}
+
+    assert "desconto" in colunas
+
+
+def test_atualizar_totais_nota_corrige_valores_sem_apagar_classificacoes(tmp_path):
+    """Reprocessar totais de nota antiga não pode apagar itens nem categorias confirmadas.
+
+    Simula uma nota gravada pelo parser antigo: valor bruto, sem desconto e sem
+    pagamentos.
+    """
+    db_path = tmp_path / "test.sqlite3"
+    nota = receita_rs.parse_nota(FIXTURE_TABULAR.read_text(encoding="utf-8"), CHAVE_TABULAR)
+    salvar_nota(nota, db_path=db_path)
+    with conexao(db_path) as con:
+        con.execute("UPDATE notas SET valor_total = '1067.44', desconto = NULL, valor_pago = NULL")
+        con.execute("DELETE FROM pagamentos")
+        con.execute(
+            "UPDATE itens SET categoria_confirmada = 'Alimentos' WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE_TABULAR],
+        )
+
+    atualizada = atualizar_totais_nota(nota, db_path=db_path)
+
+    assert atualizada is True
+    carregada = carregar_nota(CHAVE_TABULAR, db_path=db_path)
+    assert carregada.valor_total == Decimal("1014.52")
+    assert carregada.desconto == Decimal("52.92")
+    assert carregada.valor_pago == Decimal("1014.52")
+    assert len(carregada.pagamentos) == 2
+    assert len(carregada.itens) == len(nota.itens)
+    with conexao(db_path) as con:
+        categoria = con.execute(
+            "SELECT categoria_confirmada FROM itens WHERE chave_acesso = ? AND sequencia = 1",
+            [CHAVE_TABULAR],
+        ).fetchone()[0]
+    assert categoria == "Alimentos"
+
+
+def test_atualizar_totais_nota_inexistente_retorna_false(tmp_path):
+    """Nota que não está no banco não é criada pelo reprocessamento."""
+    db_path = tmp_path / "test.sqlite3"
+    nota = receita_rs.parse_nota(FIXTURE_TABULAR.read_text(encoding="utf-8"), CHAVE_TABULAR)
+
+    assert atualizar_totais_nota(nota, db_path=db_path) is False
+    with conexao(db_path) as con:
+        assert con.execute("SELECT COUNT(*) FROM notas").fetchone()[0] == 0
