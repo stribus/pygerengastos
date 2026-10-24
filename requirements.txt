@@ -202,6 +202,7 @@ numpy==2.5.4
     #   scipy
     #   sentence-transformers
     #   streamlit
+    #   torchvision
     #   transformers
 nvidia-cublas==13.1.1.3 ; sys_platform == 'linux'
     # via
@@ -294,7 +295,9 @@ pandas==2.3.3
     #   gerenciador-de-despesa
     #   streamlit
 pillow==12.3.0
-    # via streamlit
+    # via
+    #   streamlit
+    #   torchvision
 pluggy==1.7.0
     # via pytest
 propcache==0.5.4
@@ -429,7 +432,11 @@ tokenizers==0.22.2
 toml==0.10.2
     # via streamlit
 torch==2.14.1
-    # via sentence-transformers
+    # via
+    #   sentence-transformers
+    #   torchvision
+torchvision==0.29.1
+    # via gerenciador-de-despesa
 tornado==6.6
     # via
     #   gerenciador-de-despesa
