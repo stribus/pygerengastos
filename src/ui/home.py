@@ -46,3 +46,8 @@ def render_home() -> None:
             )
         else:
             st.info("Sem dados classificados para exibir.")
+        if kpis["itens_pendentes"]:
+            st.caption(
+                f"{kpis['itens_pendentes']} item(ns) aguardando confirmação "
+                f"(R$ {kpis['total_pendente']:,.2f}) não entram neste painel."
+            )

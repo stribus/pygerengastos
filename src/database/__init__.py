@@ -2179,9 +2179,9 @@ def obter_kpis_gerais(*, db_path: Path | str | None = None) -> dict[str, Any]:
 		# Total gasto (soma de valor_total das notas)
 		total_gasto_row = con.execute("SELECT SUM(valor_total) FROM notas").fetchone()
 
-		# Itens pendentes de classificação
+		# Itens pendentes de classificação (quantidade e valor)
 		itens_pendentes_row = con.execute(
-			"SELECT COUNT(*) FROM itens WHERE categoria_confirmada IS NULL"
+			"SELECT COUNT(*), SUM(valor_total) FROM itens WHERE categoria_confirmada IS NULL"
 		).fetchone()
 
 	return {
@@ -2189,6 +2189,8 @@ def obter_kpis_gerais(*, db_path: Path | str | None = None) -> dict[str, Any]:
 		"total_gasto": _para_decimal(total_gasto_row[0] if total_gasto_row else None)
 		or Decimal("0.00"),
 		"itens_pendentes": (itens_pendentes_row[0] if itens_pendentes_row else 0) or 0,
+		"total_pendente": _para_decimal(itens_pendentes_row[1] if itens_pendentes_row else None)
+		or Decimal("0.00"),
 	}
 
 
@@ -2197,7 +2199,7 @@ def obter_resumo_mensal(*, db_path: Path | str | None = None) -> list[dict[str, 
 	with conexao(db_path) as con:
 		rows = con.execute(
 			"""
-			SELECT strftime(CAST(emissao_iso AS DATE), '%Y-%m') as mes, SUM(valor_total)
+			SELECT strftime('%Y-%m', emissao_iso) as mes, SUM(valor_total)
 			FROM notas
 			WHERE emissao_iso IS NOT NULL
 			GROUP BY 1
@@ -2219,7 +2221,7 @@ def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | st
 	params = []
 
 	if mes_iso:
-		where_clause += " AND strftime(CAST(n.emissao_iso AS DATE), '%Y-%m') = ?"
+		where_clause += " AND strftime('%Y-%m', n.emissao_iso) = ?"
 		params.append(mes_iso)
 
 	query = f"""
