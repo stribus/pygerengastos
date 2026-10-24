@@ -50,11 +50,15 @@ Sempre que voltar ao projeto, apenas reative a venv antes de rodar a aplicação
 
 - `pyproject.toml` é a fonte única das dependências de produção e desenvolvimento.
 - `requirements.txt` é gerado automaticamente e **não deve ser editado manualmente**.
+- `uv.lock` é a fonte das versões fixadas; `requirements.txt` é exportado a partir dele, para que os dois nunca divirjam.
 - Para atualizar versões e regenerar o pinning reproduzível, use:
 
 ```pwsh
-    uv pip compile pyproject.toml --all-extras -o requirements.txt
+    uv lock --upgrade
+    uv export --format requirements-txt --no-hashes --all-extras --no-emit-project -o requirements.txt
 ```
+
+  Para atualizar só um pacote, troque `--upgrade` por `--upgrade-package <nome>`.
 
 - Para instalar o conjunto compilado, prefira:
 
