@@ -823,7 +823,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.33.0" },
     { name = "sentence-transformers", specifier = "==5.4.0" },
     { name = "streamlit", specifier = "==1.54.0" },
-    { name = "torchvision", specifier = ">=0.29.1" },
+    { name = "torchvision", specifier = ">=0.29.1,<0.30" },
     { name = "tornado", specifier = ">=6.5.6" },
     { name = "transformers", specifier = "==5.10.1" },
 ]

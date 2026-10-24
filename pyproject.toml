@@ -34,7 +34,7 @@ dependencies = [
     # Não é importado pelo projeto: o watcher do Streamlit examina os módulos do
     # transformers (>= 5.10), que importam torchvision; sem ele, cada execução do
     # app gera ~90 tracebacks de ModuleNotFoundError no log.
-    "torchvision>=0.29.1",
+    "torchvision>=0.29.1,<0.30",  # par do torch 2.14.x; atualizar junto com ele
     "tornado>=6.5.6",
     "transformers==5.10.1",
 ]
