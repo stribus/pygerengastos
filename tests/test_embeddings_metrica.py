@@ -161,3 +161,9 @@ def test_busca_de_produto_no_banco_aplica_limiar_compartilhado(monkeypatch, tmp_
 		encontrado = _buscar_produto_por_descricao_similaridade(con, "ARROZ 5KG")
 
 	assert (encontrado is not None) is encontra
+
+
+def test_metrica_desconhecida_e_rejeitada():
+	"""Métrica fora de cosine/l2/ip não pode virar um score com significado errado."""
+	with pytest.raises(ValueError, match="não suportada"):
+		embeddings._distancia_para_similaridade(0.1, "manhattan")

@@ -285,8 +285,10 @@ def _distancia_para_similaridade(distancia: float, espaco: str) -> float:
     """
     if espaco == "l2":
         similaridade = 1.0 - distancia / 2.0
-    else:
+    elif espaco in ("cosine", "ip"):
         similaridade = 1.0 - distancia
+    else:
+        raise ValueError(f"Métrica de distância não suportada: {espaco!r}")
     return max(0.0, similaridade)
 
 
