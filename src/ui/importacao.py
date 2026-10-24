@@ -6,7 +6,7 @@ import streamlit as st
 
 from src.classifiers import classificar_itens_pendentes
 from src.classifiers.llm_classifier import obter_modelos_disponiveis, recarregar_modelos
-from src.database import salvar_nota, carregar_nota, remover_nota
+from src.database import salvar_nota, carregar_nota, remover_nota, listar_itens_para_classificacao
 from src.scrapers import receita_rs
 from src.logger import setup_logging
 
@@ -104,6 +104,14 @@ def _executar_classificacao_para_nota(
 		return True, mensagens
 
 	mensagens.append(("success", f"Classificação concluída para {len(resultados)} item(ns)."))
+	sem_classificacao = listar_itens_para_classificacao(chave_acesso=nota.chave_acesso, limit=limite)
+	if sem_classificacao:
+		mensagens.append(
+			(
+				"warning",
+				f"{len(sem_classificacao)} item(ns) ficaram sem classificação após tentar todos os modelos. Revise-os manualmente abaixo.",
+			)
+		)
 	return True, mensagens
 
 

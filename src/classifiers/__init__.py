@@ -217,6 +217,16 @@ def classificar_itens_pendentes(
 			progress_callback=progress_callback,
 		)
 		resultados_finais.extend(resultados_llm)
+
+		nao_classificados = getattr(classifier, "itens_nao_classificados", None) or []
+		if nao_classificados:
+			mensagem = (
+				f"{len(nao_classificados)} item(ns) ficaram sem classificação após tentar "
+				"todos os modelos; revise-os na aba de análise."
+			)
+			logger.warning(mensagem)
+			if progress_callback:
+				progress_callback(mensagem)
 	else:
 		if progress_callback:
 			progress_callback("Nenhum item necessita classificação via LLM.")

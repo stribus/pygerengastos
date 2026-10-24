@@ -10,6 +10,7 @@ from src.classifiers.llm_classifier import obter_modelos_com_nomes_amigaveis
 from src.database import (
     ItemNotaRevisao,
     NotaParaRevisao,
+    listar_itens_para_classificacao,
     listar_itens_para_revisao,
     listar_notas_para_revisao,
     listar_revisoes_manuais,
@@ -106,6 +107,16 @@ def _dialogo_escolher_ia(chave_acesso: str, limite_classificacao: int, total_ite
                 {
                     "tipo": "info",
                     "texto": "Nenhum item estava disponível para reprocessamento.",
+                }
+            )
+        sem_classificacao = listar_itens_para_classificacao(
+            chave_acesso=chave_acesso, limit=limite_classificacao
+        )
+        if sem_classificacao:
+            fila.append(
+                {
+                    "tipo": "warning",
+                    "texto": f"{len(sem_classificacao)} item(ns) ficaram sem classificação após tentar todos os modelos.",
                 }
             )
         st.session_state["nota_em_revisao"] = chave_acesso
