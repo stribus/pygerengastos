@@ -31,22 +31,16 @@ def _pagamentos(nota) -> list[tuple[str, object]]:
     return sorted((pagamento.forma, pagamento.valor) for pagamento in nota.pagamentos)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--aplicar", action="store_true", help="grava as alterações (padrão: só simula)")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="banco SQLite")
-    parser.add_argument("--html", type=Path, default=RAW_HTML_DIR, help="pasta com nfce_<chave>.html")
-    args = parser.parse_args()
+def reprocessar(pasta_html: Path, db_path: Path, *, aplicar: bool) -> tuple[int, list[str]]:
+    """Compara cada HTML com a nota gravada e, se ``aplicar``, corrige as divergentes.
 
-    if not args.db.exists():
-        print(f"ERRO: banco não encontrado: {args.db}", file=sys.stderr)
-        sys.exit(1)
-
-    arquivos = sorted(args.html.glob("nfce_*.html"))
-    alteradas = 0
+    Retorna (quantidade de HTMLs lidos, chaves das notas que divergiam).
+    """
+    arquivos = sorted(pasta_html.glob("nfce_*.html"))
+    alteradas: list[str] = []
     for arquivo in arquivos:
         nota = carregar_nfce_de_arquivo(arquivo)
-        atual = carregar_nota(nota.chave_acesso, db_path=args.db)
+        atual = carregar_nota(nota.chave_acesso, db_path=db_path)
         if atual is None:
             print(f"{nota.chave_acesso}: não está no banco, ignorada")
             continue
@@ -61,19 +55,33 @@ def main() -> None:
             print(f"{nota.chave_acesso}: já correta")
             continue
 
-        alteradas += 1
+        alteradas.append(nota.chave_acesso)
         print(
             f"{nota.chave_acesso}: valor_total {atual.valor_total} -> {nota.valor_total}, "
             f"desconto {atual.desconto} -> {nota.desconto}, "
             f"valor_pago {atual.valor_pago} -> {nota.valor_pago}, "
             f"pagamentos {len(atual.pagamentos)} -> {len(nota.pagamentos)}"
         )
-        if args.aplicar:
-            atualizar_totais_nota(nota, db_path=args.db)
+        if aplicar:
+            atualizar_totais_nota(nota, db_path=db_path)
 
+    return len(arquivos), alteradas
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--aplicar", action="store_true", help="grava as alterações (padrão: só simula)")
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="banco SQLite")
+    parser.add_argument("--html", type=Path, default=RAW_HTML_DIR, help="pasta com nfce_<chave>.html")
+    args = parser.parse_args()
+
+    if not args.db.exists():
+        print(f"ERRO: banco não encontrado: {args.db}", file=sys.stderr)
+        sys.exit(1)
+
+    lidos, alteradas = reprocessar(args.html, args.db, aplicar=args.aplicar)
     modo = "atualizada(s)" if args.aplicar else "a atualizar (simulação; use --aplicar para gravar)"
-    print(f"\n{len(arquivos)} HTML(s) lido(s); {alteradas} nota(s) {modo}.")
-
+    print(f"\n{lidos} HTML(s) lido(s); {len(alteradas)} nota(s) {modo}.")
 
 if __name__ == "__main__":
     main()
