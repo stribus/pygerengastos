@@ -337,6 +337,61 @@ def _calcular_inflacao_media(
     return media
 
 
+def _montar_tabela_composicao_cesta(
+    quantidades: list[dict[str, Any]],
+    df_completo: pd.DataFrame,
+    produtos_cesta: list[str],
+    unidades: dict[str, str],
+) -> pd.DataFrame:
+    """Monta a tabela "Composição da Cesta Básica" para os ``produtos_cesta``.
+
+    ``produtos_cesta`` deve ser a mesma base usada no gráfico (regulares ou, no
+    fallback, todos os produtos com preço), tanto para as quantidades quanto
+    para o preço médio. Retorna DataFrame vazio se não houver quantidades.
+    """
+    colunas = [
+        "Produto",
+        "Unidade",
+        "Quantidade Média Mensal",
+        "Preço Médio",
+        "Custo Mensal Médio",
+    ]
+
+    # Reutilizar as quantidades mensais já buscadas, filtrando a base da cesta
+    df_qtd = pd.DataFrame(quantidades)
+    if not df_qtd.empty:
+        df_qtd = df_qtd[df_qtd["produto_nome"].isin(produtos_cesta)]
+
+    if df_qtd.empty:
+        return pd.DataFrame(columns=colunas)
+
+    # Calcular média mensal por produto
+    media_mensal = df_qtd.groupby("produto_nome").agg({
+        "quantidade_total": "mean"
+    }).reset_index()
+    media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
+
+    # Adicionar unidades
+    media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
+
+    # Adicionar preço médio no período
+    df_precos = df_completo[df_completo["produto_nome"].isin(produtos_cesta)]
+    preco_medio = df_precos.groupby("produto_nome").agg({
+        "custo_unitario_medio": "mean"
+    }).reset_index()
+    preco_medio.columns = ["Produto", "Preço Médio"]
+
+    # Juntar informações
+    tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
+
+    # Calcular custo médio mensal
+    tabela_cesta["Custo Mensal Médio"] = (
+        tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
+    )
+
+    return tabela_cesta[colunas]
+
+
 def render_grafico_custos_unitarios() -> None:
     """Renderiza gráfico de custos unitários mensais dos produtos."""
     st.subheader("📊 Custos Unitários Mensais - Top 10 Produtos")
@@ -793,45 +848,11 @@ def render_grafico_inflacao() -> None:
             + "e as quantidades médias mensais."
         )
 
-        # Reutilizar as quantidades mensais já buscadas, filtrando a base da cesta
-        df_qtd = pd.DataFrame(quantidades)
-        if not df_qtd.empty:
-            df_qtd = df_qtd[df_qtd["produto_nome"].isin(produtos_para_agregados)]
+        tabela_cesta = _montar_tabela_composicao_cesta(
+            quantidades, df_completo, produtos_para_agregados, unidades
+        )
 
-        if not df_qtd.empty:
-            # Calcular média mensal por produto
-            media_mensal = df_qtd.groupby("produto_nome").agg({
-                "quantidade_total": "mean"
-            }).reset_index()
-            media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
-
-            # Adicionar unidades
-            media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
-
-            # Adicionar preço médio no período
-            df_precos = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
-            preco_medio = df_precos.groupby("produto_nome").agg({
-                "custo_unitario_medio": "mean"
-            }).reset_index()
-            preco_medio.columns = ["Produto", "Preço Médio"]
-
-            # Juntar informações
-            tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
-
-            # Calcular custo médio mensal
-            tabela_cesta["Custo Mensal Médio"] = (
-                tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
-            )
-
-            # Reordenar colunas
-            tabela_cesta = tabela_cesta[[
-                "Produto",
-                "Unidade",
-                "Quantidade Média Mensal",
-                "Preço Médio",
-                "Custo Mensal Médio"
-            ]]
-
+        if not tabela_cesta.empty:
             # Adicionar linha de total
             total_custo = tabela_cesta["Custo Mensal Médio"].sum()
 
