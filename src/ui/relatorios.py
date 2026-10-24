@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,17 +11,40 @@ import streamlit as st
 
 from src.database import (
     obter_custos_unitarios_mensais,
+    obter_meses_com_notas,
     obter_quantidades_mensais_produtos,
     obter_top_produtos_por_quantidade,
     obter_unidades_produtos,
 )
 
+UNIDADES_FRACIONAVEIS = {"KG", "G", "L", "ML", "MG"}
+JANELA_REGULARIDADE_MESES = 6
+QTD_MINIMA_MES_UNITARIO = 1.0
+MEDIA_MINIMA_MENSAL_FRACIONAVEL = 0.1
+
+
+def _eh_unidade_fracionavel(unidade: str | None) -> bool:
+    """Indica se a unidade representa produto vendido fracionado (peso/volume)."""
+    return (unidade or "UN").strip().upper() in UNIDADES_FRACIONAVEIS
+
 
 def _calcular_variacao_percentual(valor_anterior: float, valor_atual: float) -> float:
     """Calcula variação percentual entre dois valores."""
-    if valor_anterior == 0 or valor_anterior is None:
+    if valor_anterior is None or pd.isna(valor_anterior) or valor_anterior == 0:
         return 0.0
     return ((valor_atual - valor_anterior) / valor_anterior) * 100
+
+
+def _gerar_meses_periodo(data_inicio_str: str, data_fim_str: str) -> list[str]:
+    """Gera a lista ordenada de meses "YYYY-MM" do período (inclui o mês de data_fim)."""
+    data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d")
+    data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d")
+
+    return pd.period_range(
+        start=data_inicio,
+        end=data_fim,
+        freq="M",
+    ).strftime("%Y-%m").tolist()
 
 
 def _preencher_meses_faltantes(
@@ -31,7 +55,9 @@ def _preencher_meses_faltantes(
 ) -> pd.DataFrame:
     """Preenche meses faltantes com o último preço conhecido para cada produto.
 
-    Retorna DataFrame com colunas: ano_mes, produto_nome, custo_unitario_medio
+    Retorna DataFrame com colunas: ano_mes, produto_nome, custo_unitario_medio.
+    Garante que todos os produtos apareçam em todos os meses do período; meses
+    anteriores à primeira compra ficam sem preço (NaN após a conversão do pandas).
     """
     # Converter dados para DataFrame
     df = pd.DataFrame(dados)
@@ -40,16 +66,7 @@ def _preencher_meses_faltantes(
         # Retorna DataFrame vazio com estrutura esperada
         return pd.DataFrame(columns=["ano_mes", "produto_nome", "custo_unitario_medio"])
 
-    # Gerar lista completa de meses no período usando pd.period_range
-    data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d")
-    data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d")
-
-    # Inclui o mês que contém data_fim no range de meses
-    meses = pd.period_range(
-        start=data_inicio,
-        end=data_fim,
-        freq="M",
-    ).strftime("%Y-%m").tolist()
+    meses = _gerar_meses_periodo(data_inicio_str, data_fim_str)
 
     # Criar DataFrame completo com todos produtos x meses
     linhas_completas = []
@@ -68,12 +85,12 @@ def _preencher_meses_faltantes(
                 # Usa último preço conhecido ou None
                 preco = ultimo_preco
 
-            if preco is not None:
-                linhas_completas.append({
-                    "ano_mes": mes,
-                    "produto_nome": produto,
-                    "custo_unitario_medio": preco
-                })
+            # Sempre adicionar a linha para garantir alinhamento correto de meses
+            linhas_completas.append({
+                "ano_mes": mes,
+                "produto_nome": produto,
+                "custo_unitario_medio": preco
+            })
 
     return pd.DataFrame(linhas_completas)
 
@@ -82,68 +99,157 @@ def _calcular_inflacao_acumulada(
     df: pd.DataFrame,
     coluna_mes: str = "ano_mes",
     coluna_valor: str = "custo_unitario_medio",
-) -> list[float]:
+) -> list[float | None]:
     """Calcula inflação acumulada para série temporal de preços.
 
-    Retorna lista de valores de inflação acumulada em percentual.
+    Retorna lista de valores de inflação acumulada em percentual, alinhada com
+    as linhas do DataFrame. Meses sem dado (None/NaN) permanecem como None; a
+    acumulação começa em 0% no primeiro mês com preço e, havendo lacunas
+    interiores, compõe sobre o último preço válido.
     """
     if df.empty:
         return []
 
     valores = df[coluna_valor].tolist()
-    inflacao_acumulada = [0.0]  # Primeiro mês sempre 0%
+    inflacao_acumulada: list[float | None] = [None] * len(valores)
 
-    for i in range(1, len(valores)):
-        var_percentual = _calcular_variacao_percentual(valores[i-1], valores[i])
-        # Acumular: (1 + inflacao_anterior/100) * (1 + var_atual/100) - 1
-        inflacao_anterior = inflacao_acumulada[-1]
-        inflacao_nova = ((1 + inflacao_anterior/100) * (1 + var_percentual/100) - 1) * 100
-        inflacao_acumulada.append(inflacao_nova)
+    ultimo_valor: float | None = None
+    inflacao_atual = 0.0
+
+    for i, val in enumerate(valores):
+        if val is None or pd.isna(val):
+            continue
+
+        val_f = float(val)
+        if ultimo_valor is None:
+            # Primeiro mês com dado é a base (0%)
+            inflacao_atual = 0.0
+        else:
+            var_percentual = _calcular_variacao_percentual(ultimo_valor, val_f)
+            # Acumular: (1 + inflacao_anterior/100) * (1 + var_atual/100) - 1
+            inflacao_atual = ((1 + inflacao_atual / 100) * (1 + var_percentual / 100) - 1) * 100
+
+        inflacao_acumulada[i] = inflacao_atual
+        ultimo_valor = val_f
 
     return inflacao_acumulada
 
 
 def _identificar_produtos_regulares(
-    df: pd.DataFrame,
-    meses_consecutivos_min: int = 2,
+    quantidades: list[dict[str, Any]],
+    produtos: list[str],
+    unidades: dict[str, str],
+    meses_periodo: list[str],
+    janela_meses: int = JANELA_REGULARIDADE_MESES,
+    meses_com_notas: Iterable[str] | None = None,
 ) -> list[str]:
-    """Identifica produtos comprados regularmente (pelo menos N meses consecutivos).
+    """Identifica produtos comprados com regularidade na janela recente do período.
 
-    Retorna lista de nomes de produtos regulares.
+    Um produto é regular quando, nos últimos ``janela_meses`` meses ativos do
+    período selecionado (ou em todos eles, se forem menos), nunca fica 2 meses
+    seguidos sem compra — incluindo as bordas da janela. A avaliação usa os
+    meses de compra real (``quantidades``, saída de
+    obter_quantidades_mensais_produtos):
+
+    - Produto unitário (UN, PC...): o mês conta se quantidade >= 1.
+    - Produto fracionável (KG, G, L...): o mês conta se quantidade > 0, e a
+      média mensal de quantidade na janela deve superar
+      ``MEDIA_MINIMA_MENSAL_FRACIONAVEL``.
+
+    ``meses_com_notas`` (saída de obter_meses_com_notas) lista os meses em que
+    houve alguma nota importada. Meses fora dessa lista são descartados da
+    janela: sem nenhuma nota, o mês reflete lacuna de coleta, não ausência de
+    compra, e penalizaria todos os produtos de uma vez. A adjacência da regra
+    passa então a valer entre meses ativos consecutivos, não no calendário.
+    Quando omitido, todos os meses do período são considerados ativos.
+
+    Retorna lista de nomes de produtos regulares, preservando a ordem de
+    ``produtos``.
     """
+    if not meses_periodo:
+        return []
+
+    if meses_com_notas is not None:
+        ativos = set(meses_com_notas)
+        meses_periodo = [mes for mes in meses_periodo if mes in ativos]
+        if not meses_periodo:
+            return []
+
+    meses_janela = meses_periodo[-janela_meses:]
+    n_janela = len(meses_janela)
+
+    qtd_por_produto_mes: dict[tuple[str, str], float] = {}
+    for registro in quantidades:
+        chave = (registro["produto_nome"], registro["ano_mes"])
+        qtd_por_produto_mes[chave] = (
+            qtd_por_produto_mes.get(chave, 0.0) + float(registro["quantidade_total"])
+        )
+
     produtos_regulares = []
+    for produto in produtos:
+        fracionavel = _eh_unidade_fracionavel(unidades.get(produto))
+        qtds = [qtd_por_produto_mes.get((produto, mes), 0.0) for mes in meses_janela]
 
-    for produto in df["produto_nome"].unique():
-        df_produto = df[df["produto_nome"] == produto].sort_values("ano_mes")
-        meses = df_produto["ano_mes"].tolist()
+        if fracionavel:
+            comprou = [q > 0 for q in qtds]
+        else:
+            comprou = [q >= QTD_MINIMA_MES_UNITARIO for q in qtds]
 
-        if len(meses) < meses_consecutivos_min:
+        # Produto sem nenhuma compra na janela nunca é regular
+        if not any(comprou):
             continue
 
-        # Verificar se há pelo menos N meses consecutivos
-        consecutivos_max = 1
-        consecutivos_atual = 1
+        # Nunca 2 meses seguidos sem compra dentro da janela (bordas incluídas)
+        if any(not comprou[i] and not comprou[i + 1] for i in range(len(comprou) - 1)):
+            continue
 
-        for i in range(1, len(meses)):
-            mes_anterior = datetime.strptime(meses[i-1], "%Y-%m")
-            mes_atual = datetime.strptime(meses[i], "%Y-%m")
+        # Fracionáveis exigem volume mínimo médio na janela
+        if fracionavel and (sum(qtds) / n_janela) <= MEDIA_MINIMA_MENSAL_FRACIONAVEL:
+            continue
 
-            # Verificar se é mês seguinte
-            if mes_anterior.month == 12:
-                mes_esperado = mes_anterior.replace(year=mes_anterior.year + 1, month=1)
-            else:
-                mes_esperado = mes_anterior.replace(month=mes_anterior.month + 1)
-
-            if mes_atual == mes_esperado:
-                consecutivos_atual += 1
-                consecutivos_max = max(consecutivos_max, consecutivos_atual)
-            else:
-                consecutivos_atual = 1
-
-        if consecutivos_max >= meses_consecutivos_min:
-            produtos_regulares.append(produto)
+        produtos_regulares.append(produto)
 
     return produtos_regulares
+
+
+def _aplicar_backfill(
+    df_completo: pd.DataFrame,
+    produtos: list[str],
+    meses_ordenados: list[str],
+) -> pd.DataFrame:
+    """Aplica backfill: o primeiro preço conhecido vale para os meses anteriores.
+
+    Recebe o DataFrame já preenchido com forward fill e restringe a ``produtos``;
+    meses anteriores à primeira compra recebem o primeiro preço conhecido, como
+    se esse fosse o preço original. Usado apenas para cesta básica e inflação
+    média, mantendo a composição constante em todo o período.
+
+    Retorna DataFrame com colunas: ano_mes, produto_nome, custo_unitario_medio.
+    """
+    colunas = ["ano_mes", "produto_nome", "custo_unitario_medio"]
+
+    if df_completo.empty or not produtos:
+        return pd.DataFrame(columns=colunas)
+
+    df_sel = df_completo[df_completo["produto_nome"].isin(produtos)]
+    if df_sel.empty:
+        return pd.DataFrame(columns=colunas)
+
+    # pivot_table com aggfunc="mean" protege contra eventuais duplicatas
+    pivot = df_sel.pivot_table(
+        index="ano_mes",
+        columns="produto_nome",
+        values="custo_unitario_medio",
+        aggfunc="mean",
+    )
+    pivot = pivot.reindex(meses_ordenados).sort_index().bfill()
+    pivot.index.name = "ano_mes"
+
+    return pivot.reset_index().melt(
+        id_vars="ano_mes",
+        var_name="produto_nome",
+        value_name="custo_unitario_medio",
+    )
 
 
 def _calcular_cesta_basica_personalizada(
@@ -152,9 +258,11 @@ def _calcular_cesta_basica_personalizada(
 ) -> pd.DataFrame:
     """Calcula custo médio mensal da cesta a partir da média simples dos custos unitários.
 
-    Atualmente não há ponderação por quantidade: assume-se quantidade = 1 para todos
-    os produtos regulares em cada mês. Retorna DataFrame com: ano_mes, custo_cesta
-    (valor médio simples dos custos unitários).
+    Espera receber as séries com backfill (_aplicar_backfill), o que garante a
+    composição constante da cesta em todos os meses. Não há ponderação por
+    quantidade: assume-se quantidade = 1 para todos os produtos regulares em cada
+    mês. Retorna DataFrame com: ano_mes, custo_cesta (valor médio simples dos
+    custos unitários).
     """
     # Filtrar apenas produtos regulares
     df_regulares = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
@@ -174,6 +282,114 @@ def _calcular_cesta_basica_personalizada(
     resultado.columns = ["ano_mes", "custo_cesta"]
 
     return resultado
+
+
+def _montar_series_inflacao(
+    df_completo: pd.DataFrame,
+    produtos: list[str],
+    meses_ordenados: list[str],
+) -> dict[str, list[float]]:
+    """Calcula a inflação acumulada de cada produto alinhada a ``meses_ordenados``.
+
+    Meses sem dado (antes da primeira compra) ficam como NaN, para que o gráfico
+    inicie a linha do produto no primeiro mês com compra real (em 0%).
+    """
+    mapa_mes_idx = {mes: idx for idx, mes in enumerate(meses_ordenados)}
+    series: dict[str, list[float]] = {}
+
+    for produto in produtos:
+        df_produto = df_completo[df_completo["produto_nome"] == produto].sort_values("ano_mes")
+        if df_produto.empty:
+            continue
+
+        inflacao_calculada = _calcular_inflacao_acumulada(df_produto)
+        meses_produto = df_produto["ano_mes"].tolist()
+
+        inflacao_alinhada = [float('nan')] * len(meses_ordenados)
+        for idx, mes in enumerate(meses_produto):
+            if mes in mapa_mes_idx and inflacao_calculada[idx] is not None:
+                inflacao_alinhada[mapa_mes_idx[mes]] = inflacao_calculada[idx]
+
+        series[produto] = inflacao_alinhada
+
+    return series
+
+
+def _calcular_inflacao_media(
+    series: dict[str, list[float]],
+    produtos: list[str],
+    n_meses: int,
+) -> list[float]:
+    """Média mês a mês da inflação acumulada dos ``produtos`` informados.
+
+    Mês em que nenhum produto tem dado vira NaN — e não 0.0 —, para que ausência
+    de dado não seja desenhada no gráfico como "inflação zero".
+    """
+    media: list[float] = []
+    for i in range(n_meses):
+        valores_mes = [
+            series[p][i]
+            for p in produtos
+            if p in series and not pd.isna(series[p][i])
+        ]
+        media.append(sum(valores_mes) / len(valores_mes) if valores_mes else float('nan'))
+
+    return media
+
+
+def _montar_tabela_composicao_cesta(
+    quantidades: list[dict[str, Any]],
+    df_completo: pd.DataFrame,
+    produtos_cesta: list[str],
+    unidades: dict[str, str],
+) -> pd.DataFrame:
+    """Monta a tabela "Composição da Cesta Básica" para os ``produtos_cesta``.
+
+    ``produtos_cesta`` deve ser a mesma base usada no gráfico (regulares ou, no
+    fallback, todos os produtos com preço), tanto para as quantidades quanto
+    para o preço médio. Retorna DataFrame vazio se não houver quantidades.
+    """
+    colunas = [
+        "Produto",
+        "Unidade",
+        "Quantidade Média Mensal",
+        "Preço Médio",
+        "Custo Mensal Médio",
+    ]
+
+    # Reutilizar as quantidades mensais já buscadas, filtrando a base da cesta
+    df_qtd = pd.DataFrame(quantidades)
+    if not df_qtd.empty:
+        df_qtd = df_qtd[df_qtd["produto_nome"].isin(produtos_cesta)]
+
+    if df_qtd.empty:
+        return pd.DataFrame(columns=colunas)
+
+    # Calcular média mensal por produto
+    media_mensal = df_qtd.groupby("produto_nome").agg({
+        "quantidade_total": "mean"
+    }).reset_index()
+    media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
+
+    # Adicionar unidades
+    media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
+
+    # Adicionar preço médio no período
+    df_precos = df_completo[df_completo["produto_nome"].isin(produtos_cesta)]
+    preco_medio = df_precos.groupby("produto_nome").agg({
+        "custo_unitario_medio": "mean"
+    }).reset_index()
+    preco_medio.columns = ["Produto", "Preço Médio"]
+
+    # Juntar informações
+    tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
+
+    # Calcular custo médio mensal
+    tabela_cesta["Custo Mensal Médio"] = (
+        tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
+    )
+
+    return tabela_cesta[colunas]
 
 
 def render_grafico_custos_unitarios() -> None:
@@ -350,6 +566,23 @@ def render_grafico_inflacao() -> None:
         st.info("Nenhum dado de custo encontrado para os produtos selecionados.")
         return
 
+    # Quantidades mensais: usadas na regra de regularidade e na composição da cesta
+    quantidades = obter_quantidades_mensais_produtos(
+        produtos_nomes,
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    )
+
+    # Buscar unidades dos produtos (regra de regularidade e rótulos do gráfico)
+    unidades = obter_unidades_produtos(produtos_nomes)
+
+    # Meses com nota importada: mês sem nenhuma nota é lacuna de coleta, não de
+    # compra, e por isso não conta contra a regularidade dos produtos
+    meses_com_notas = obter_meses_com_notas(
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    )
+
     # Preencher meses faltantes com último preço conhecido
     df_completo = _preencher_meses_faltantes(
         custos,
@@ -362,51 +595,70 @@ def render_grafico_inflacao() -> None:
         st.info("Não há dados suficientes para calcular inflação.")
         return
 
-    # Identificar produtos regulares (comprados pelo menos 2 meses consecutivos)
-    produtos_regulares = _identificar_produtos_regulares(df_completo)
+    meses_ordenados = _gerar_meses_periodo(data_inicio.isoformat(), data_fim.isoformat())
 
-    # Calcular inflação acumulada para cada produto
-    inflacao_por_produto = {}
-    meses_ordenados = sorted(df_completo["ano_mes"].unique())
+    # Identificar produtos regulares (compras reais na janela de meses ativos)
+    produtos_regulares = _identificar_produtos_regulares(
+        quantidades,
+        produtos_nomes,
+        unidades,
+        meses_ordenados,
+        meses_com_notas=meses_com_notas,
+    )
 
-    for produto in produtos_nomes:
-        df_produto = df_completo[df_completo["produto_nome"] == produto].sort_values("ano_mes")
-        if not df_produto.empty:
-            inflacao = _calcular_inflacao_acumulada(df_produto)
-            # Garantir que a lista tenha o mesmo tamanho de meses_ordenados
-            # preenchendo com NaN para meses sem dados
-            inflacao_alinhada = [inflacao[i] if i < len(inflacao) else float('nan')
-                                 for i in range(len(meses_ordenados))]
-            inflacao_por_produto[produto] = inflacao_alinhada
+    # Cesta e média exigem preço conhecido em pelo menos um mês do período
+    produtos_com_preco = set(
+        df_completo.loc[df_completo["custo_unitario_medio"].notna(), "produto_nome"]
+    )
+    produtos_regulares = [p for p in produtos_regulares if p in produtos_com_preco]
 
-    # Calcular inflação média (apenas produtos regulares)
-    if produtos_regulares:
-        inflacao_media = []
-        for i in range(len(meses_ordenados)):
-            valores_mes = [
-                inflacao_por_produto[p][i]
-                for p in produtos_regulares
-                if p in inflacao_por_produto and not pd.isna(inflacao_por_produto[p][i])
-            ]
-            if valores_mes:
-                inflacao_media.append(sum(valores_mes) / len(valores_mes))
-            else:
-                inflacao_media.append(0.0)
+    # Base dos agregados: os regulares ou, na falta deles, todos os produtos com
+    # preço — assim média e cesta nunca viram uma linha reta em 0% sem explicação
+    usando_fallback = not produtos_regulares
+    if usando_fallback:
+        produtos_para_agregados = [p for p in produtos_nomes if p in produtos_com_preco]
+        if produtos_para_agregados:
+            st.warning(
+                "Nenhum produto atingiu o critério de regularidade neste período "
+                "(nunca ficar 2 meses seguidos sem compra, considerando apenas os "
+                "meses com notas importadas). A Inflação Média e a Cesta Básica "
+                "abaixo estão usando **todos os produtos** do top, e não apenas os "
+                "regulares — interprete com cautela."
+            )
     else:
-        inflacao_media = [0.0] * len(meses_ordenados)
+        produtos_para_agregados = produtos_regulares
 
-    # Calcular cesta básica personalizada
-    df_cesta = _calcular_cesta_basica_personalizada(df_completo, produtos_regulares)
+    # Inflação acumulada por produto (sem backfill: linha começa na 1ª compra real)
+    inflacao_por_produto = _montar_series_inflacao(df_completo, produtos_nomes, meses_ordenados)
+
+    # Séries com backfill: o primeiro preço conhecido vale para os meses anteriores,
+    # mantendo a composição da cesta e da média constante em todo o período
+    df_backfilled = _aplicar_backfill(df_completo, produtos_para_agregados, meses_ordenados)
+
+    # Calcular inflação média (séries com backfill dos produtos agregados)
+    if produtos_para_agregados and not df_backfilled.empty:
+        series_agregados = _montar_series_inflacao(
+            df_backfilled, produtos_para_agregados, meses_ordenados
+        )
+        inflacao_media = _calcular_inflacao_media(
+            series_agregados, produtos_para_agregados, len(meses_ordenados)
+        )
+    else:
+        inflacao_media = [float('nan')] * len(meses_ordenados)
+
+    # Calcular cesta básica personalizada (séries com backfill)
+    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, produtos_para_agregados)
     if not df_cesta.empty:
         inflacao_cesta_lista = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
-        # Alinhar com meses_ordenados
-        inflacao_cesta = [inflacao_cesta_lista[i] if i < len(inflacao_cesta_lista) else 0.0
-                          for i in range(len(meses_ordenados))]
+        # Alinhar com meses_ordenados usando mapeamento correto
+        mapa_mes_idx = {mes: idx for idx, mes in enumerate(meses_ordenados)}
+        inflacao_cesta = [float('nan')] * len(meses_ordenados)
+        meses_cesta = df_cesta["ano_mes"].tolist()
+        for idx, mes in enumerate(meses_cesta):
+            if mes in mapa_mes_idx and inflacao_cesta_lista[idx] is not None:
+                inflacao_cesta[mapa_mes_idx[mes]] = inflacao_cesta_lista[idx]
     else:
-        inflacao_cesta = [0.0] * len(meses_ordenados)
-
-    # Buscar unidades dos produtos
-    unidades = obter_unidades_produtos(produtos_nomes)
+        inflacao_cesta = [float('nan')] * len(meses_ordenados)
 
     # Seletor de produtos visíveis
     st.write("**Produtos disponíveis** (marque para exibir no gráfico):")
@@ -424,13 +676,23 @@ def render_grafico_inflacao() -> None:
                 rotulo + eh_regular,
                 value=True,
                 key=f"inflacao_check_{produto}",
-                help="⭐ = produto regular (comprado em meses consecutivos)"
+                help=(
+                    "⭐ = produto regular (comprado com frequência nos últimos 6 meses "
+                    "com notas importadas)"
+                )
             ):
                 produtos_visiveis.append(produto)
 
+    # Rótulo da média acompanha a base realmente usada no cálculo
+    rotulo_media = (
+        "📊 Inflação Média (todos os produtos)"
+        if usando_fallback
+        else "📊 Inflação Média (produtos regulares)"
+    )
+
     # Sempre mostrar inflação média e cesta básica
     mostrar_media = st.checkbox(
-        "📊 Inflação Média (produtos regulares)",
+        rotulo_media,
         value=True,
         key="inflacao_check_media",
     )
@@ -491,7 +753,7 @@ def render_grafico_inflacao() -> None:
     ]
 
     # 2. Criar DataFrame de inflação por produto
-    # inflacao_por_produto já está alinhado com meses_ordenados (linha 394-395)
+    # inflacao_por_produto já está alinhado com meses_ordenados (_montar_series_inflacao)
     # mas usamos reindex para garantir robustez contra mudanças futuras
     df_inflacao_produtos = pd.DataFrame(
         inflacao_por_produto,
@@ -515,19 +777,8 @@ def render_grafico_inflacao() -> None:
             .reindex(meses_ordenados)
         )
 
-        # Inflação da cesta alinhada com meses_ordenados
-        # Preenche meses faltantes com último valor conhecido (comportamento original)
-        if len(inflacao_cesta) < len(meses_ordenados):
-            # Preencher com último valor (ou None se lista vazia)
-            ultimo_valor = inflacao_cesta[-1] if inflacao_cesta else None
-            inflacao_cesta_alinhada = inflacao_cesta + [
-                ultimo_valor for _ in range(len(meses_ordenados) - len(inflacao_cesta))
-            ]
-        else:
-            # Truncar para o tamanho correto
-            inflacao_cesta_alinhada = inflacao_cesta[:len(meses_ordenados)]
-
-        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta_alinhada
+        # Inflação da cesta já está alinhada com meses_ordenados
+        df_extras["Cesta Básica - Inflação (%)"] = inflacao_cesta
 
     # 4. Intercalar colunas de preço e inflação para cada produto
     colunas_ordenadas = ["Mês"]
@@ -576,63 +827,32 @@ def render_grafico_inflacao() -> None:
     # Mostrar tabela de dados
     with st.expander("📋 Ver dados completos em tabela"):
         st.dataframe(
-            df_export.style.format({
-                col: "{:.2f}" for col in df_export.columns if col != "Mês"
-            }),
+            df_export.style.format(
+                {col: "{:.2f}" for col in df_export.columns if col != "Mês"},
+                na_rep="",
+            ),
             width='stretch',
         )
 
     # Mostrar composição da Cesta Básica Personalizada
-    if mostrar_cesta and produtos_regulares:
+    if mostrar_cesta and produtos_para_agregados:
         st.write("---")
         st.subheader("🛒 Composição da Cesta Básica Personalizada")
         st.write(
             "Esta tabela mostra os produtos que compõem sua cesta básica personalizada "
-            "(produtos regulares comprados em meses consecutivos) e as quantidades médias mensais."
-        )
-
-        # Buscar quantidades mensais dos produtos regulares
-        quantidades = obter_quantidades_mensais_produtos(
-            produtos_regulares,
-            data_inicio=data_inicio.isoformat(),
-            data_fim=data_fim.isoformat(),
-        )
-
-        if quantidades:
-            # Calcular média mensal por produto
-            df_qtd = pd.DataFrame(quantidades)
-            media_mensal = df_qtd.groupby("produto_nome").agg({
-                "quantidade_total": "mean"
-            }).reset_index()
-            media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
-
-            # Adicionar unidades
-            media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
-
-            # Adicionar preço médio no período
-            df_precos = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
-            preco_medio = df_precos.groupby("produto_nome").agg({
-                "custo_unitario_medio": "mean"
-            }).reset_index()
-            preco_medio.columns = ["Produto", "Preço Médio"]
-
-            # Juntar informações
-            tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
-
-            # Calcular custo médio mensal
-            tabela_cesta["Custo Mensal Médio"] = (
-                tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
+            + (
+                "(todos os produtos do top, pois nenhum atingiu o critério de regularidade) "
+                if usando_fallback
+                else "(produtos comprados com frequência nos últimos 6 meses com notas) "
             )
+            + "e as quantidades médias mensais."
+        )
 
-            # Reordenar colunas
-            tabela_cesta = tabela_cesta[[
-                "Produto",
-                "Unidade",
-                "Quantidade Média Mensal",
-                "Preço Médio",
-                "Custo Mensal Médio"
-            ]]
+        tabela_cesta = _montar_tabela_composicao_cesta(
+            quantidades, df_completo, produtos_para_agregados, unidades
+        )
 
+        if not tabela_cesta.empty:
             # Adicionar linha de total
             total_custo = tabela_cesta["Custo Mensal Médio"].sum()
 
@@ -656,18 +876,30 @@ def render_grafico_inflacao() -> None:
             # Explicação adicional
             with st.expander("ℹ️ Como é calculada a cesta básica?"):
                 st.markdown("""
-                **Produtos incluídos:** Apenas produtos regulares (⭐), ou seja, aqueles
-                comprados em pelo menos 2 meses consecutivos no período selecionado.
+                **Produtos incluídos:** Apenas produtos regulares (⭐): nos últimos 6 meses
+                **com notas importadas** dentro do período (ou em todos eles, se forem
+                menos), o produto nunca fica 2 meses seguidos sem compra. Meses sem
+                nenhuma nota importada são ignorados na janela — eles indicam lacuna de
+                coleta, não ausência de compra. Produtos vendidos por unidade contam o mês
+                quando há pelo menos 1 unidade comprada; produtos fracionados (kg, l etc.)
+                contam qualquer quantidade, mas exigem média mensal acima de 0,1 na janela.
 
-                **Quantidade Média Mensal:** Média de quantidade comprada por mês para cada produto.
+                Se nenhum produto atingir o critério no período, a cesta e a inflação média
+                passam a usar **todos os produtos** do top, com um aviso acima do gráfico.
+
+                **Quantidade Média Mensal:** Média de quantidade comprada por mês, considerando
+                os meses com compra no período selecionado (não confundir com a média da janela
+                de 6 meses, usada apenas no critério de regularidade).
 
                 **Preço Médio:** Preço unitário médio do produto no período.
 
                 **Custo Mensal Médio:** Quantidade média × Preço médio.
 
                 **Inflação da Cesta:** Calculada sobre a média dos custos unitários de todos
-                os produtos regulares mês a mês, mostrando como o custo total da sua cesta
-                evolui ao longo do tempo.
+                os produtos regulares mês a mês. Para meses anteriores à primeira compra de
+                um produto, o primeiro preço conhecido é usado como preço original
+                (contribuindo 0% de inflação), mantendo a composição da cesta constante
+                em todo o período.
                 """)
         else:
             st.info("Não há dados de quantidade disponíveis para os produtos da cesta.")

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from src.database import (
@@ -11,11 +12,26 @@ from src.database import (
     inicializar_banco,
     obter_top_produtos_por_quantidade,
     obter_custos_unitarios_mensais,
+    obter_meses_com_notas,
+    obter_quantidades_mensais_produtos,
     obter_unidades_produtos,
     salvar_nota,
     seed_categorias_csv,
 )
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
+from src.ui.relatorios import (
+    _aplicar_backfill,
+    _calcular_cesta_basica_personalizada,
+    _calcular_inflacao_acumulada,
+    _calcular_inflacao_media,
+    _calcular_variacao_percentual,
+    _eh_unidade_fracionavel,
+    _gerar_meses_periodo,
+    _identificar_produtos_regulares,
+    _montar_series_inflacao,
+    _montar_tabela_composicao_cesta,
+    _preencher_meses_faltantes,
+)
 
 
 def _criar_nota_teste(
@@ -292,43 +308,579 @@ def test_obter_unidades_produtos_inexistentes(db_com_dados_teste):
     assert unidades == {}
 
 
-def test_calculos_matematicos_basicos():
-    """Testa cálculos auxiliares para relatórios (variação e inflação)."""
-    
-    # Teste de variação percentual
-    def calc_var(v_ant, v_atu):
-        if v_ant == 0:
-            return 0.0
-        return ((v_atu - v_ant) / v_ant) * 100
-    
-    var = calc_var(100.0, 110.0)
-    assert abs(var - 10.0) < 0.01
-    
-    var_neg = calc_var(100.0, 90.0)
-    assert abs(var_neg - (-10.0)) < 0.01
-    
-    var_zero = calc_var(0.0, 100.0)
-    assert var_zero == 0.0
-    
-    # Teste de inflação acumulada
-    def calc_inflacao(valores):
-        inflacao = [0.0]
-        for i in range(1, len(valores)):
-            var_pct = calc_var(valores[i-1], valores[i])
-            inflacao_ant = inflacao[-1]
-            inflacao_nova = ((1 + inflacao_ant/100) * (1 + var_pct/100) - 1) * 100
-            inflacao.append(inflacao_nova)
-        return inflacao
-    
-    valores = [100.0, 110.0, 121.0]
-    inflacao = calc_inflacao(valores)
-    
-    # Esperado: [0%, 10%, 21%]
+# ---------------------------------------------------------------------------
+# Helpers para montar entradas dos testes de cálculo
+# ---------------------------------------------------------------------------
+
+def _df_precos(valores, dtype=None) -> pd.DataFrame:
+    """Cria DataFrame de série mensal a partir de uma lista de preços."""
+    meses = [f"2025-{m:02d}" for m in range(1, len(valores) + 1)]
+    serie = pd.Series(valores, dtype=dtype) if dtype else pd.Series(valores)
+    return pd.DataFrame({"ano_mes": meses, "custo_unitario_medio": serie})
+
+
+def _qtd(produto: str, mes: str, qtd: float) -> dict:
+    """Registro no formato de obter_quantidades_mensais_produtos."""
+    return {"produto_nome": produto, "ano_mes": mes, "quantidade_total": qtd}
+
+
+MESES_6 = ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"]
+
+
+# ---------------------------------------------------------------------------
+# _calcular_variacao_percentual / _calcular_inflacao_acumulada (funções reais)
+# ---------------------------------------------------------------------------
+
+def test_variacao_percentual():
+    """Variação percentual básica, com guardas para zero, None e NaN."""
+    assert abs(_calcular_variacao_percentual(100.0, 110.0) - 10.0) < 0.01
+    assert abs(_calcular_variacao_percentual(100.0, 90.0) - (-10.0)) < 0.01
+    assert _calcular_variacao_percentual(0.0, 100.0) == 0.0
+    assert _calcular_variacao_percentual(None, 100.0) == 0.0
+    assert _calcular_variacao_percentual(float("nan"), 100.0) == 0.0
+
+
+def test_inflacao_acumulada_serie_completa():
+    """Série sem lacunas: [100, 110, 121] -> [0%, 10%, 21%]."""
+    inflacao = _calcular_inflacao_acumulada(_df_precos([100.0, 110.0, 121.0]))
+
     assert abs(inflacao[0] - 0.0) < 0.01
     assert abs(inflacao[1] - 10.0) < 0.01
     assert abs(inflacao[2] - 21.0) < 0.01
-    
-    # Teste com valores constantes
-    valores_const = [100.0, 100.0, 100.0]
-    inflacao_const = calc_inflacao(valores_const)
-    assert all(abs(i) < 0.01 for i in inflacao_const)
+
+
+def test_inflacao_acumulada_precos_constantes():
+    """Preços constantes: inflação 0% em todos os meses."""
+    inflacao = _calcular_inflacao_acumulada(_df_precos([100.0, 100.0, 100.0]))
+
+    assert all(v is not None and abs(v) < 0.01 for v in inflacao)
+
+
+def test_inflacao_acumulada_nan_a_esquerda():
+    """Cenário da regressão do commit 1fdd053: produto entra no meio do período.
+
+    NaN nos meses iniciais deve resultar em None (linha ausente no gráfico) e a
+    acumulação começa em 0% no primeiro mês com preço — sem propagar NaN.
+    """
+    nan = float("nan")
+    inflacao = _calcular_inflacao_acumulada(_df_precos([nan, nan, 100.0, 110.0]))
+
+    assert inflacao[0] is None
+    assert inflacao[1] is None
+    assert abs(inflacao[2] - 0.0) < 0.01
+    assert abs(inflacao[3] - 10.0) < 0.01
+
+
+def test_inflacao_acumulada_gap_interior():
+    """Lacuna no meio da série: compõe sobre o último preço válido."""
+    inflacao = _calcular_inflacao_acumulada(_df_precos([100.0, float("nan"), 110.0]))
+
+    assert abs(inflacao[0] - 0.0) < 0.01
+    assert inflacao[1] is None
+    assert abs(inflacao[2] - 10.0) < 0.01
+
+
+def test_inflacao_acumulada_todos_nan():
+    """Série inteira sem dados: tudo None."""
+    nan = float("nan")
+    inflacao = _calcular_inflacao_acumulada(_df_precos([nan, nan, nan]))
+
+    assert inflacao == [None, None, None]
+
+
+def test_inflacao_acumulada_none_literal_equivale_nan():
+    """Coluna object com None literal produz o mesmo resultado que NaN float."""
+    inflacao = _calcular_inflacao_acumulada(
+        _df_precos([None, 100.0, 110.0], dtype=object)
+    )
+
+    assert inflacao[0] is None
+    assert abs(inflacao[1] - 0.0) < 0.01
+    assert abs(inflacao[2] - 10.0) < 0.01
+
+
+def test_inflacao_acumulada_df_vazio():
+    """DataFrame vazio retorna lista vazia."""
+    df_vazio = pd.DataFrame(columns=["ano_mes", "custo_unitario_medio"])
+    assert _calcular_inflacao_acumulada(df_vazio) == []
+
+
+# ---------------------------------------------------------------------------
+# _preencher_meses_faltantes
+# ---------------------------------------------------------------------------
+
+def test_preencher_meses_faltantes_denso_com_ffill():
+    """Todos os produtos aparecem em todos os meses; ffill após a 1ª compra."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "custo_unitario_medio": 12.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "custo_unitario_medio": 5.0},
+    ]
+    df = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-03-31")
+
+    assert len(df) == 6  # 2 produtos x 3 meses
+
+    serie_a = df[df["produto_nome"] == "A"].sort_values("ano_mes")
+    assert serie_a["custo_unitario_medio"].tolist() == [10.0, 10.0, 12.0]
+
+    serie_b = df[df["produto_nome"] == "B"].sort_values("ano_mes")
+    valores_b = serie_b["custo_unitario_medio"].tolist()
+    assert pd.isna(valores_b[0])  # antes da 1ª compra: sem preço
+    assert valores_b[1] == 5.0
+    assert valores_b[2] == 5.0  # forward fill
+
+
+# ---------------------------------------------------------------------------
+# _eh_unidade_fracionavel / _identificar_produtos_regulares (nova regra)
+# ---------------------------------------------------------------------------
+
+def test_eh_unidade_fracionavel():
+    assert _eh_unidade_fracionavel("KG")
+    assert _eh_unidade_fracionavel("kg")
+    assert _eh_unidade_fracionavel("L")
+    assert not _eh_unidade_fracionavel("UN")
+    assert not _eh_unidade_fracionavel(None)  # default UN
+
+
+def test_regular_unitario_meses_alternados():
+    """UN com compra em m1/m3/m5: nunca 2 meses seguidos sem compra -> regular."""
+    quantidades = [_qtd("A", m, 1) for m in ["2025-01", "2025-03", "2025-05"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6
+    )
+    assert regulares == ["A"]
+
+
+def test_nao_regular_lacuna_dois_meses():
+    """Compras em m1/m4/m6 deixam m2+m3 vazios (lacuna dupla) -> não regular."""
+    quantidades = [_qtd("A", m, 1) for m in ["2025-01", "2025-04", "2025-06"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6
+    )
+    assert regulares == []
+
+
+def test_nao_regular_borda_inicial():
+    """Compras apenas de m3 em diante: m1+m2 vazios -> não regular."""
+    quantidades = [_qtd("A", m, 1) for m in ["2025-03", "2025-04", "2025-05", "2025-06"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6
+    )
+    assert regulares == []
+
+
+def test_nao_regular_borda_final():
+    """Compras apenas até m4: m5+m6 vazios -> não regular."""
+    quantidades = [_qtd("A", m, 1) for m in ["2025-01", "2025-02", "2025-03", "2025-04"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6
+    )
+    assert regulares == []
+
+
+def test_unitario_quantidade_fracionaria_nao_conta():
+    """Para produto UN, mês com quantidade < 1 não conta como compra."""
+    quantidades = [
+        _qtd("A", "2025-01", 1),
+        _qtd("A", "2025-02", 0.5),  # não conta: cria lacuna dupla com m3
+        _qtd("A", "2025-04", 1),
+        _qtd("A", "2025-05", 1),
+        _qtd("A", "2025-06", 1),
+    ]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6
+    )
+    assert regulares == []
+
+
+def test_fracionavel_media_abaixo_do_limite():
+    """KG comprado todo mês, mas média mensal 0.05 <= 0.1 -> não regular."""
+    quantidades = [_qtd("A", m, 0.05) for m in MESES_6]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "KG"}, MESES_6
+    )
+    assert regulares == []
+
+
+def test_fracionavel_media_acima_do_limite():
+    """KG com 0.3 em m1/m3/m5 (média 0.15 > 0.1, sem lacuna dupla) -> regular."""
+    quantidades = [_qtd("A", m, 0.3) for m in ["2025-01", "2025-03", "2025-05"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "KG"}, MESES_6
+    )
+    assert regulares == ["A"]
+
+
+def test_janela_menor_que_seis_meses():
+    """Período de 3 meses usa o período inteiro como janela."""
+    meses_3 = ["2025-01", "2025-02", "2025-03"]
+    # UN com compra em m1 e m3 (m2 vazio, sem lacuna dupla) -> regular
+    quantidades = [_qtd("A", "2025-01", 1), _qtd("A", "2025-03", 1)]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, meses_3
+    )
+    assert regulares == ["A"]
+
+    # Fracionável: média calculada sobre 3 meses (0.6 / 3 = 0.2 > 0.1) -> regular
+    quantidades_kg = [_qtd("B", "2025-01", 0.3), _qtd("B", "2025-03", 0.3)]
+    regulares_kg = _identificar_produtos_regulares(
+        quantidades_kg, ["B"], {"B": "KG"}, meses_3
+    )
+    assert regulares_kg == ["B"]
+
+
+def test_produto_sem_compra_na_janela():
+    """Produto do top-10 com compras apenas antes dos últimos 6 meses -> não regular."""
+    meses_12 = _gerar_meses_periodo("2024-07-01", "2025-06-30")
+    # Compras apenas em 2024 (fora da janela 2025-01..2025-06)
+    quantidades = [_qtd("A", m, 5) for m in ["2024-07", "2024-08", "2024-09"]]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, meses_12
+    )
+    assert regulares == []
+
+
+def test_produto_sem_unidade_no_dict_usa_default_un():
+    """Produto ausente do dict de unidades é tratado como UN (qtd >= 1)."""
+    # 0.5 todo mês: como UN, nenhum mês conta -> não regular
+    # (se fosse tratado como fracionável, seria regular: média 0.5 > 0.1)
+    quantidades = [_qtd("A", m, 0.5) for m in MESES_6]
+
+    regulares = _identificar_produtos_regulares(quantidades, ["A"], {}, MESES_6)
+    assert regulares == []
+
+
+def test_regularidade_preserva_ordem_do_top():
+    """A lista de regulares preserva a ordem dos produtos informados."""
+    quantidades = [_qtd(p, m, 1) for p in ["B", "A"] for m in MESES_6]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["B", "A"], {"B": "UN", "A": "UN"}, MESES_6
+    )
+    assert regulares == ["B", "A"]
+
+
+def test_regularidade_com_dados_do_banco(db_com_dados_teste):
+    """Integração: saídas reais do banco alimentam a regra sem adaptação."""
+    db_path = db_com_dados_teste
+    produtos = ["Arroz Branco", "Feijao Preto", "Detergente Neutro"]
+
+    quantidades = obter_quantidades_mensais_produtos(
+        produtos,
+        data_inicio="2025-01-01",
+        data_fim="2025-03-31",
+        db_path=db_path,
+    )
+    unidades = obter_unidades_produtos(produtos, db_path=db_path)
+    meses = _gerar_meses_periodo("2025-01-01", "2025-03-31")
+
+    regulares = _identificar_produtos_regulares(quantidades, produtos, unidades, meses)
+
+    # Arroz: compras em jan/fev/mar -> regular
+    # Feijao: jan/fev (m3 vazio na borda, lacuna simples) -> regular
+    # Detergente: jan/mar (m2 vazio, lacuna simples) -> regular
+    assert regulares == ["Arroz Branco", "Feijao Preto", "Detergente Neutro"]
+
+
+# ---------------------------------------------------------------------------
+# Regularidade x meses sem nota importada (lacuna de coleta != de consumo)
+# ---------------------------------------------------------------------------
+
+def test_mes_sem_nota_nao_penaliza_regularidade():
+    """Lacuna de coleta não desqualifica: 03 e 04 não tiveram nota importada.
+
+    Sem o filtro, os dois meses vazios seguidos derrubariam o produto — foi o que
+    esvaziava a lista de regulares e deixava a inflação média achatada em 0%.
+    """
+    quantidades = [_qtd("A", m, 2) for m in ["2025-01", "2025-02", "2025-05", "2025-06"]]
+
+    # Sem informar meses ativos: 03 e 04 contam como lacuna dupla -> não regular
+    assert _identificar_produtos_regulares(quantidades, ["A"], {"A": "UN"}, MESES_6) == []
+
+    # Informando que 03 e 04 não tiveram nota: janela vira [01, 02, 05, 06]
+    regulares = _identificar_produtos_regulares(
+        quantidades,
+        ["A"],
+        {"A": "UN"},
+        MESES_6,
+        meses_com_notas=["2025-01", "2025-02", "2025-05", "2025-06"],
+    )
+    assert regulares == ["A"]
+
+
+def test_lacuna_real_ainda_desqualifica():
+    """Mês ativo (com nota importada) e sem compra continua contando contra."""
+    # Comprou só nas bordas; 02..05 tiveram notas, mas nenhuma compra do produto
+    quantidades = [_qtd("A", "2025-01", 2), _qtd("A", "2025-06", 2)]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6, meses_com_notas=MESES_6
+    )
+    assert regulares == []
+
+
+def test_janela_conta_apenas_meses_ativos():
+    """A janela de 6 meses é medida em meses ativos, e o divisor acompanha.
+
+    Com apenas 2 meses ativos, a média do fracionável é 0.6/2 = 0.3 (> 0.1).
+    Se a janela ainda fosse de 6 meses de calendário, seria 0.6/6 = 0.1 e o
+    produto não passaria.
+    """
+    meses_12 = _gerar_meses_periodo("2025-01-01", "2025-12-31")
+    quantidades = [_qtd("A", "2025-11", 0.3), _qtd("A", "2025-12", 0.3)]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades,
+        ["A"],
+        {"A": "KG"},
+        meses_12,
+        meses_com_notas=["2025-11", "2025-12"],
+    )
+    assert regulares == ["A"]
+
+    # Sem o filtro, a janela pega 07..12 e a média cai para o limite -> fora
+    assert _identificar_produtos_regulares(quantidades, ["A"], {"A": "KG"}, meses_12) == []
+
+
+def test_meses_com_notas_none_preserva_comportamento():
+    """meses_com_notas=None equivale a omitir o parâmetro."""
+    quantidades = [_qtd("A", m, 1) for m in MESES_6]
+
+    sem_param = _identificar_produtos_regulares(quantidades, ["A"], {"A": "UN"}, MESES_6)
+    com_none = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6, meses_com_notas=None
+    )
+    assert sem_param == com_none == ["A"]
+
+
+def test_nenhum_mes_ativo_no_periodo():
+    """Período sem nenhuma nota importada não produz regulares."""
+    quantidades = [_qtd("A", m, 5) for m in MESES_6]
+
+    regulares = _identificar_produtos_regulares(
+        quantidades, ["A"], {"A": "UN"}, MESES_6, meses_com_notas=[]
+    )
+    assert regulares == []
+
+
+def test_obter_meses_com_notas(db_com_dados_teste):
+    """Retorna os meses com nota importada, ordenados e sem repetição."""
+    meses = obter_meses_com_notas(db_path=db_com_dados_teste)
+    assert meses == ["2025-01", "2025-02", "2025-03"]
+
+
+def test_obter_meses_com_notas_respeita_periodo(db_com_dados_teste):
+    """Filtro de período restringe os meses retornados."""
+    meses = obter_meses_com_notas(
+        data_inicio="2025-02-01",
+        data_fim="2025-02-28",
+        db_path=db_com_dados_teste,
+    )
+    assert meses == ["2025-02"]
+
+
+# ---------------------------------------------------------------------------
+# _calcular_inflacao_media (base dos agregados e fallback)
+# ---------------------------------------------------------------------------
+
+def test_inflacao_media_ignora_nan_dos_produtos():
+    """A média de cada mês usa apenas os produtos com dado naquele mês."""
+    nan = float("nan")
+    series = {"A": [0.0, 10.0, 20.0], "B": [nan, 20.0, 40.0]}
+
+    media = _calcular_inflacao_media(series, ["A", "B"], 3)
+
+    assert abs(media[0] - 0.0) < 0.01   # só A tem dado
+    assert abs(media[1] - 15.0) < 0.01  # (10 + 20) / 2
+    assert abs(media[2] - 30.0) < 0.01  # (20 + 40) / 2
+
+
+def test_inflacao_media_mes_sem_dado_vira_nan():
+    """Mês sem nenhum produto com dado é NaN, não 0.0.
+
+    Regressão do sintoma relatado: o antigo preenchimento com 0.0 desenhava uma
+    linha reta em 0% indistinguível de inflação real nula.
+    """
+    nan = float("nan")
+    series = {"A": [nan, 10.0]}
+
+    media = _calcular_inflacao_media(series, ["A"], 2)
+
+    assert pd.isna(media[0])
+    assert abs(media[1] - 10.0) < 0.01
+
+
+def test_inflacao_media_sem_produtos_nao_vira_serie_zero():
+    """Sem produtos na base, a média é toda NaN — nunca uma constante 0.0."""
+    media = _calcular_inflacao_media({}, [], 3)
+
+    assert len(media) == 3
+    assert all(pd.isna(v) for v in media)
+
+
+def test_fallback_usa_todos_os_produtos_com_preco():
+    """Fallback da tela: sem regulares, a média sai de 0% usando todo o top.
+
+    Reproduz o cenário real (nenhum produto regular no período) e confirma que a
+    base alternativa gera uma curva de verdade, não uma linha achatada.
+    """
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-02", "custo_unitario_medio": 12.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "custo_unitario_medio": 20.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "custo_unitario_medio": 26.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-02-28")
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-02-28")
+
+    # Base do fallback: todos os produtos com preço conhecido
+    df_backfilled = _aplicar_backfill(df_completo, ["A", "B"], meses)
+    series = _montar_series_inflacao(df_backfilled, ["A", "B"], meses)
+    media = _calcular_inflacao_media(series, ["A", "B"], len(meses))
+
+    assert abs(media[0] - 0.0) < 0.01    # base
+    assert abs(media[1] - 25.0) < 0.01   # (20% + 30%) / 2
+    assert media != [0.0] * len(meses)
+
+
+# ---------------------------------------------------------------------------
+# _aplicar_backfill / cesta básica / alinhamento
+# ---------------------------------------------------------------------------
+
+def test_aplicar_backfill_preenche_meses_iniciais():
+    """Meses anteriores à 1ª compra recebem o primeiro preço conhecido."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-03", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-04", "custo_unitario_medio": 12.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-04-30")
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-04-30")
+
+    df_backfilled = _aplicar_backfill(df_completo, ["A"], meses)
+    serie = df_backfilled.sort_values("ano_mes")["custo_unitario_medio"].tolist()
+
+    assert serie == [10.0, 10.0, 10.0, 12.0]
+
+
+def test_cesta_com_backfill_sem_salto_de_composicao():
+    """Produto entrando no meio do período não gera degrau no custo da cesta."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-02", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-04", "custo_unitario_medio": 10.0},
+        {"produto_nome": "B", "ano_mes": "2025-03", "custo_unitario_medio": 50.0},
+        {"produto_nome": "B", "ano_mes": "2025-04", "custo_unitario_medio": 50.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-04-30")
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-04-30")
+
+    df_backfilled = _aplicar_backfill(df_completo, ["A", "B"], meses)
+    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, ["A", "B"])
+
+    custos_cesta = df_cesta.sort_values("ano_mes")["custo_cesta"].tolist()
+    assert custos_cesta == [30.0, 30.0, 30.0, 30.0]  # sem degrau quando B "entra"
+
+    inflacao_cesta = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
+    assert all(v is not None and abs(v) < 0.01 for v in inflacao_cesta)
+
+
+def test_inflacao_zero_em_meses_backfilled():
+    """Nos meses retro-preenchidos o produto contribui com 0% de inflação."""
+    custos = [
+        {"produto_nome": "B", "ano_mes": "2025-03", "custo_unitario_medio": 50.0},
+        {"produto_nome": "B", "ano_mes": "2025-04", "custo_unitario_medio": 55.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-04-30")
+    df_completo = _preencher_meses_faltantes(custos, ["B"], "2025-01-01", "2025-04-30")
+    df_backfilled = _aplicar_backfill(df_completo, ["B"], meses)
+
+    series = _montar_series_inflacao(df_backfilled, ["B"], meses)
+
+    assert abs(series["B"][0] - 0.0) < 0.01
+    assert abs(series["B"][1] - 0.0) < 0.01
+    assert abs(series["B"][2] - 0.0) < 0.01
+    assert abs(series["B"][3] - 10.0) < 0.01
+
+
+def test_backfill_e_cesta_sem_produtos_regulares():
+    """Sem produtos regulares: DataFrames vazios com colunas corretas."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-02-28")
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-02-28")
+
+    df_backfilled = _aplicar_backfill(df_completo, [], meses)
+    assert df_backfilled.empty
+    assert list(df_backfilled.columns) == ["ano_mes", "produto_nome", "custo_unitario_medio"]
+
+    df_cesta = _calcular_cesta_basica_personalizada(df_completo, [])
+    assert df_cesta.empty
+    assert list(df_cesta.columns) == ["ano_mes", "custo_cesta"]
+
+
+def test_alinhamento_com_meses_ordenados():
+    """Produto iniciando em m2: série alinhada tem NaN em m1 e 0% exatamente em m2."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-02", "custo_unitario_medio": 100.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "custo_unitario_medio": 110.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-04-30")
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-04-30")
+
+    series = _montar_series_inflacao(df_completo, ["A"], meses)
+    serie_a = series["A"]
+
+    assert len(serie_a) == len(meses)
+    assert pd.isna(serie_a[meses.index("2025-01")])
+    assert abs(serie_a[meses.index("2025-02")] - 0.0) < 0.01
+    assert abs(serie_a[meses.index("2025-03")] - 10.0) < 0.01
+    assert abs(serie_a[meses.index("2025-04")] - 10.0) < 0.01  # ffill mantém preço
+
+
+# ---------------------------------------------------------------------------
+# _montar_tabela_composicao_cesta (tabela "Composição da Cesta Básica")
+# ---------------------------------------------------------------------------
+
+def test_composicao_cesta_inclui_produtos_do_fallback():
+    """No fallback (nenhum regular), a tabela usa os mesmos produtos do gráfico.
+
+    Regressão: o preço médio era filtrado por `produtos_regulares`, vazio no
+    fallback; o merge com as quantidades saía vazio e o total virava R$ 0,00.
+    """
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "custo_unitario_medio": 4.0},
+    ]
+    quantidades = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "quantidade_total": 2.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "quantidade_total": 3.0},
+    ]
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-01-31")
+
+    tabela = _montar_tabela_composicao_cesta(
+        quantidades, df_completo, ["A", "B"], {"A": "UN", "B": "UN"}
+    )
+
+    assert sorted(tabela["Produto"]) == ["A", "B"]
+    assert abs(tabela["Custo Mensal Médio"].sum() - (2 * 10.0 + 3 * 4.0)) < 0.01
+
+
+def test_composicao_cesta_sem_quantidades_retorna_vazio():
+    """Sem quantidades para os produtos da cesta, a tabela sai vazia."""
+    custos = [{"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0}]
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-01-31")
+
+    tabela = _montar_tabela_composicao_cesta([], df_completo, ["A"], {"A": "UN"})
+
+    assert tabela.empty

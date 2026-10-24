@@ -1274,14 +1274,21 @@ def registrar_classificacao_itens(
 			raise
 
 
-def limpar_categorias_confirmadas(
+def limpar_categorias_para_reclassificacao(
 	chave_acesso: str,
 	*,
 	db_path: Path | str | None = None,
 ) -> int:
 	"""
-	Remove todas as categorias (confirmadas e sugeridas) de todos os itens de uma nota,
-	voltando ao estado pendente para reclassificação.
+	Remove as categorias sugerida E confirmada dos itens já confirmados de uma nota,
+	devolvendo-os à fila de reclassificação.
+
+	As duas precisam ser zeradas: listar_itens_para_classificacao() só considera
+	pendente o item com `categoria_confirmada IS NULL AND categoria_sugerida IS NULL`
+	(no caminho padrão, com incluir_confirmados=False). Preservar a sugerida deixaria
+	o item fora da fila e tornaria esta limpeza um no-op. A sugerida é dado derivado,
+	regenerado pela classificação; a confirmada é a entrada humana que se está
+	explicitamente descartando.
 
 	Note: Preserva produto_id e embeddings para permitir cache semântico.
 	Para reset completo incluindo produtos, use limpar_classificacoes_completas().
@@ -2430,6 +2437,44 @@ def obter_quantidades_mensais_produtos(
 		for row in rows
 	]
 
+
+def obter_meses_com_notas(
+	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
+	db_path: Path | str | None = None,
+) -> list[str]:
+	"""Retorna os meses ("YYYY-MM") que possuem ao menos uma nota importada.
+
+	Usado pelos relatórios para distinguir mês sem compra de mês sem coleta:
+	um mês ausente da lista não teve nenhuma nota importada e, portanto, não
+	deve penalizar a regularidade de nenhum produto.
+	"""
+	filtros = ["emissao_data IS NOT NULL"]
+	params: list[object] = []
+
+	if data_inicio:
+		filtros.append("emissao_data >= ?")
+		params.append(data_inicio)
+	if data_fim:
+		filtros.append("emissao_data <= ?")
+		params.append(data_fim)
+
+	where_clause = " AND ".join(filtros)
+
+	query = f"""
+		SELECT DISTINCT strftime('%Y-%m', emissao_data) as ano_mes
+		FROM notas
+		WHERE {where_clause}
+		ORDER BY ano_mes
+	"""
+
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+
+	return [row[0] for row in rows if row[0]]
+
+
 def listar_produtos_similares(
 	threshold: int = 85,
 	*,
@@ -2746,43 +2791,14 @@ def consolidar_produtos(
 				[produto_id_destino, nome_final or destino_row[0] or None, produto_id_origem]
 			).rowcount
 
-			# Migrar aliases
-			aliases_origem = con.execute(
-				"SELECT texto_original FROM aliases_produtos WHERE produto_id = ?",
-				[produto_id_origem]
-			).fetchall()
-
-			for alias_row in aliases_origem:
-				texto_alias = alias_row[0]
-				try:
-					con.execute(
-						"INSERT INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
-						[produto_id_destino, texto_alias]
-					)
-					aliases_migrados += 1
-				except sqlite3.IntegrityError:
-					# Conflito: O alias já existe. Verificar se pertence ao produto de destino ou a um terceiro produto
-					produto_atual_alias = con.execute(
-						"SELECT produto_id FROM aliases_produtos WHERE texto_original = ?",
-						[texto_alias]
-					).fetchone()
-
-					if produto_atual_alias and produto_atual_alias[0] == produto_id_destino:
-						# Alias já pertence ao produto de destino - operação nula, não é erro
-						logger.debug(
-							"Alias '%s' já pertence ao produto de destino %d (migração não necessária)",
-							texto_alias, produto_id_destino
-						)
-					else:
-						# Alias pertence a um terceiro produto - não migrar para evitar corrupção de dados
-						logger.warning(
-							"Não foi possível migrar o alias '%s' do produto de origem %d para o destino %d, "
-							"pois o alias já está em uso pelo produto %d.",
-							texto_alias, produto_id_origem, produto_id_destino, produto_atual_alias[0] if produto_atual_alias else None
-						)
-
-			# Deletar aliases antigos (agora todos já foram migrados)
-			con.execute("DELETE FROM aliases_produtos WHERE produto_id = ?", [produto_id_origem])
+			# Migrar aliases reapontando-os para o destino.
+			# aliases_produtos tem UNIQUE (texto_original) global, então cada texto
+			# pertence a um único produto: os aliases da origem jamais colidem com os
+			# do destino ou de terceiros, e o UPDATE não pode violar a constraint.
+			aliases_migrados = con.execute(
+				"UPDATE aliases_produtos SET produto_id = ? WHERE produto_id = ?",
+				[produto_id_destino, produto_id_origem]
+			).rowcount
 
 			# Deletar produto origem (agora sem referências dangling)
 			# Foreign keys estão habilitadas - se falhar, há um bug

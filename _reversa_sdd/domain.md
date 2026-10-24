@@ -15,10 +15,12 @@
 | **Cache semântico** | ChromaDB com embeddings de descrições já classificadas |
 | **Produto normalizado** | Produto com nome_base + marca_base extraídos via pipeline de normalização |
 | **Alias de produto** | Mapeamento texto_original da NFC-e → produto_id (aprendizado contínuo) |
-| **Produto regular** | Produto comprado em ≥2 meses consecutivos (para relatórios) |
+| **Produto regular** | Produto que, nos últimos 6 meses ativos do período (ou em todos eles se menos), nunca fica 2 meses seguidos sem compra; unitários exigem qtd ≥1 no mês, fracionáveis (KG/G/L/ML/MG) exigem média mensal >0,1 na janela |
+| **Mês ativo** | Mês com ao menos uma nota importada; meses sem nota são descartados da janela de regularidade (lacuna de coleta ≠ ausência de compra) |
 | **Cesta básica personalizada** | Conjunto de produtos regulares usado para calcular inflação personalizada |
 | **Inflação acumulada composta** | `(1+inf_ant/100)*(1+var_atual/100)-1` — série temporal de preços |
 | **Forward fill** | Preenchimento de meses sem compra com o último preço conhecido |
+| **Backfill (cesta/média)** | Meses anteriores à 1ª compra recebem o primeiro preço conhecido como preço original — só para cesta básica e inflação média |
 | **SEFAZ-RS** | Secretaria da Fazenda do Rio Grande do Sul — portal de NFC-e |
 | **LiteLLM** | Biblioteca de abstração para chamadas a múltiplos provedores LLM |
 | **Embedding** | Vetor numérico (384 dim, `all-MiniLM-L6-v2`) que representa semanticamente uma descrição |
@@ -63,10 +65,12 @@
 
 | # | Regra | Severidade | Fonte |
 |---|-------|------------|-------|
-| R17 | Produto regular: comprado em ≥2 meses consecutivos | Paramétrica | `relatorios.py:108` |
-| R18 | Cesta básica: apenas produtos regulares, sem ponderação por quantidade | Limitação | `relatorios.py:167` |
-| R19 | Inflação acumulada: composta `(1+inf_ant)*(1+var_atual)-1` | Paramétrica | `relatorios.py:96` |
-| R20 | Meses sem compra: forward fill com último preço conhecido | Comportamental | `relatorios.py:69` |
+| R17 | Produto regular: nos últimos 6 **meses ativos** do período (ou todos, se menos), nunca 2 meses seguidos sem compra real (bordas incluídas); unitários exigem qtd ≥1 no mês; fracionáveis (KG/G/L/ML/MG) contam qualquer qtd >0, mas exigem média mensal >0,1 na janela | Paramétrica | `relatorios.py:_identificar_produtos_regulares` |
+| R17b | Meses sem nenhuma nota importada são removidos da janela de regularidade; a adjacência da regra vale entre meses ativos consecutivos | Comportamental | `database:obter_meses_com_notas` / `relatorios.py:_identificar_produtos_regulares` |
+| R18 | Cesta básica: apenas produtos regulares, sem ponderação por quantidade; usa backfill (1º preço conhecido vale para meses anteriores), mantendo composição constante | Limitação | `relatorios.py:_calcular_cesta_basica_personalizada` |
+| R18b | Sem nenhum produto regular no período, cesta e inflação média caem para todos os produtos do top com preço, exibindo aviso; mês sem dado é NaN, nunca 0% | Comportamental | `relatorios.py:render_grafico_inflacao` / `_calcular_inflacao_media` |
+| R19 | Inflação acumulada: composta `(1+inf_ant)*(1+var_atual)-1`, base 0% no 1º mês com preço | Paramétrica | `relatorios.py:_calcular_inflacao_acumulada` |
+| R20 | Meses sem compra: forward fill com último preço conhecido; cesta e inflação média recebem também backfill; linhas individuais começam na 1ª compra real | Comportamental | `relatorios.py:_preencher_meses_faltantes` / `_aplicar_backfill` |
 | R21 | Top-N para relatórios: 10 produtos mais comprados | Paramétrica | `relatorios.py:215` |
 | R22 | Período padrão de análise: últimos 12 meses | Paramétrica | `relatorios.py:191` |
 

@@ -12,7 +12,7 @@ from src.database import (
     listar_itens_padronizados,
     listar_notas,
     listar_revisoes_manuais,
-    limpar_categorias_confirmadas,
+    limpar_categorias_para_reclassificacao,
     limpar_classificacoes_completas,
     normalizar_produto_descricao,
     registrar_classificacao_itens,
@@ -295,8 +295,8 @@ def test_listar_itens_padronizados_retorna_dimensoes(tmp_path):
     assert item.valor_total == nota.itens[0].valor_total
 
 
-def test_limpar_categorias_confirmadas_atualiza_rows_corretos(tmp_path):
-    """Testa se limpar_categorias_confirmadas atualiza o número correto de rows."""
+def test_limpar_categorias_para_reclassificacao_atualiza_rows_corretos(tmp_path):
+    """Testa se limpar_categorias_para_reclassificacao atualiza o número correto de rows."""
     db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
@@ -324,14 +324,19 @@ def test_limpar_categorias_confirmadas_atualiza_rows_corretos(tmp_path):
     )
 
     # Limpar categorias confirmadas
-    rows_atualizadas = limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+    rows_atualizadas = limpar_categorias_para_reclassificacao(CHAVE, db_path=db_path)
 
     # Deve ter atualizado exatamente 2 rows (os que tinham categoria_confirmada)
     assert rows_atualizadas == 2
 
 
-def test_limpar_categorias_confirmadas_limpa_apenas_campos_corretos(tmp_path):
-    """Testa se limpar_categorias_confirmadas limpa apenas categoria_confirmada e categoria_confirmada_id."""
+def test_limpar_categorias_para_reclassificacao_limpa_apenas_campos_corretos(tmp_path):
+    """Zera as duas categorias e preserva produto e metadados de classificação.
+
+    A categoria_sugerida também é limpa de propósito: listar_itens_para_classificacao()
+    só trata como pendente o item sem sugerida E sem confirmada, então preservá-la
+    deixaria o item fora da fila de reclassificação.
+    """
     db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
@@ -366,8 +371,11 @@ def test_limpar_categorias_confirmadas_limpa_apenas_campos_corretos(tmp_path):
             [CHAVE],
         ).fetchone()
 
-    # Limpar categorias confirmadas
-    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+    # Pré-condição: ambas as categorias estavam preenchidas antes da limpeza
+    assert before[0] is not None  # categoria_sugerida
+    assert before[1] is not None  # categoria_confirmada
+
+    limpar_categorias_para_reclassificacao(CHAVE, db_path=db_path)
 
     # Verificar estado após limpeza
     with conexao(db_path) as con:
@@ -381,20 +389,25 @@ def test_limpar_categorias_confirmadas_limpa_apenas_campos_corretos(tmp_path):
             [CHAVE],
         ).fetchone()
 
-    # categoria_confirmada deve ser NULL
-    assert after[1] is None
+    # As duas categorias são zeradas para o item voltar à fila de reclassificação
+    assert after[0] is None  # categoria_sugerida
+    assert after[1] is None  # categoria_confirmada
 
-    # Outros campos NÃO devem ser afetados
-    assert after[0] == before[0]  # categoria_sugerida
+    # Produto e metadados de classificação NÃO devem ser afetados
     assert after[2] == before[2]  # produto_id
     assert after[3] == before[3]  # produto_nome
     assert after[4] == before[4]  # produto_marca
     assert after[5] == before[5]  # fonte_classificacao
     assert after[6] == before[6]  # confianca_classificacao
 
+    # O que dá sentido à limpeza: o item volta à fila de reclassificação no
+    # caminho padrão (incluir_confirmados=False, apenas_sem_categoria=True)
+    pendentes = listar_itens_para_classificacao(chave_acesso=CHAVE, db_path=db_path)
+    assert any(item.sequencia == 1 for item in pendentes)
 
-def test_limpar_categorias_confirmadas_atualiza_timestamp(tmp_path):
-    """Testa se limpar_categorias_confirmadas atualiza o atualizado_em timestamp."""
+
+def test_limpar_categorias_para_reclassificacao_atualiza_timestamp(tmp_path):
+    """Testa se limpar_categorias_para_reclassificacao atualiza o atualizado_em timestamp."""
     db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
     salvar_nota(nota, db_path=db_path)
@@ -414,19 +427,23 @@ def test_limpar_categorias_confirmadas_atualiza_timestamp(tmp_path):
         confirmar=True,
     )
 
-    # Capturar timestamp antes da limpeza
+    # CURRENT_TIMESTAMP do SQLite tem resolução de 1 segundo, então dormir alguns
+    # milissegundos não garante diferença. Recuar o timestamp inicial torna a
+    # comparação determinística, sem depender da velocidade da máquina.
     with conexao(db_path) as con:
+        con.execute(
+            """
+            UPDATE itens SET atualizado_em = datetime('now', '-1 hour')
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        )
         timestamp_antes = con.execute(
             "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
             [CHAVE],
         ).fetchone()[0]
 
-    # Aguardar um momento para garantir que o timestamp mude
-    import time
-    time.sleep(0.1)
-
-    # Limpar categorias confirmadas
-    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+    limpar_categorias_para_reclassificacao(CHAVE, db_path=db_path)
 
     # Verificar timestamp após limpeza
     with conexao(db_path) as con:
@@ -439,8 +456,8 @@ def test_limpar_categorias_confirmadas_atualiza_timestamp(tmp_path):
     assert timestamp_depois > timestamp_antes
 
 
-def test_limpar_categorias_confirmadas_filtra_por_chave_acesso(tmp_path):
-    """Testa se limpar_categorias_confirmadas filtra corretamente por chave_acesso."""
+def test_limpar_categorias_para_reclassificacao_filtra_por_chave_acesso(tmp_path):
+    """Testa se limpar_categorias_para_reclassificacao filtra corretamente por chave_acesso."""
     db_path = tmp_path / "test.sqlite3"
     nota1 = _nota_exemplo()
     salvar_nota(nota1, db_path=db_path)
@@ -462,7 +479,7 @@ def test_limpar_categorias_confirmadas_filtra_por_chave_acesso(tmp_path):
     )
 
     # Limpar apenas a primeira nota
-    limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+    limpar_categorias_para_reclassificacao(CHAVE, db_path=db_path)
 
     # Verificar que apenas a primeira nota foi limpa
     with conexao(db_path) as con:
@@ -479,7 +496,7 @@ def test_limpar_categorias_confirmadas_filtra_por_chave_acesso(tmp_path):
     assert categoria_nota2 == "higiene"  # Não afetada
 
 
-def test_limpar_categorias_confirmadas_sem_itens_confirmados(tmp_path):
+def test_limpar_categorias_para_reclassificacao_sem_itens_confirmados(tmp_path):
     """Testa comportamento quando não há itens com categoria_confirmada."""
     db_path = tmp_path / "test.sqlite3"
     nota = _nota_exemplo()
@@ -501,7 +518,7 @@ def test_limpar_categorias_confirmadas_sem_itens_confirmados(tmp_path):
     )
 
     # Limpar categorias confirmadas (não há nenhuma)
-    rows_atualizadas = limpar_categorias_confirmadas(CHAVE, db_path=db_path)
+    rows_atualizadas = limpar_categorias_para_reclassificacao(CHAVE, db_path=db_path)
 
     # Nenhuma row deve ser atualizada
     assert rows_atualizadas == 0
@@ -598,18 +615,22 @@ def test_limpar_classificacoes_completas_atualiza_timestamp(tmp_path):
         confirmar=True,
     )
 
-    # Capturar timestamp antes da limpeza
+    # CURRENT_TIMESTAMP do SQLite tem resolução de 1 segundo, então dormir alguns
+    # milissegundos não garante diferença. Recuar o timestamp inicial torna a
+    # comparação determinística, sem depender da velocidade da máquina.
     with conexao(db_path) as con:
+        con.execute(
+            """
+            UPDATE itens SET atualizado_em = datetime('now', '-1 hour')
+            WHERE chave_acesso = ? AND sequencia = 1
+            """,
+            [CHAVE],
+        )
         timestamp_antes = con.execute(
             "SELECT atualizado_em FROM itens WHERE chave_acesso = ? AND sequencia = 1",
             [CHAVE],
         ).fetchone()[0]
 
-    # Aguardar um momento para garantir que o timestamp mude
-    import time
-    time.sleep(0.1)
-
-    # Limpar todas as classificações
     limpar_classificacoes_completas(CHAVE, db_path=db_path)
 
     # Verificar timestamp após limpeza

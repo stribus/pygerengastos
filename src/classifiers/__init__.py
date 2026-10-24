@@ -10,7 +10,7 @@ from src.database import (
 	listar_itens_para_classificacao,
 	registrar_classificacao_itens,
 	obter_categoria_de_produto,
-	limpar_categorias_confirmadas,
+	limpar_categorias_para_reclassificacao,
 	limpar_classificacoes_completas,
 )
 
@@ -114,8 +114,9 @@ def classificar_itens_pendentes(
 							f"Limpas {num_limpos} classificações anteriores (modo full reset)."
 						)
 			else:
-				# Modo parcial: limpar apenas categorias confirmadas
-				num_limpos = limpar_categorias_confirmadas(chave_acesso, db_path=db_path)
+				# Modo parcial: devolve os itens confirmados à fila de reclassificação
+				# (zera sugerida e confirmada), preservando produto_id e embeddings
+				num_limpos = limpar_categorias_para_reclassificacao(chave_acesso, db_path=db_path)
 				if num_limpos > 0:
 					logger.info(
 						"Resetadas %s categorias confirmadas para a nota %s antes de reprocessar.",

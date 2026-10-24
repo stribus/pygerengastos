@@ -382,7 +382,7 @@ Testes de funções de limpeza devem verificar:
 4. **Filtro por `chave_acesso` funciona**
 5. **Comportamento com zero rows afetadas**
 
-**Exemplo**: Ver `tests/test_database.py::test_limpar_categorias_confirmadas_*`
+**Exemplo**: Ver `tests/test_database.py::test_limpar_categorias_para_reclassificacao_*`
 
 ## Tratamento de Exceções (Padrões)
 

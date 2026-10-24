@@ -18,7 +18,7 @@ stateDiagram-v2
     Cru --> Sugerido : Classif. automática (cache/LLM)
     Cru --> Confirmado : Classif. automática com confirmar=True
     Sugerido --> Confirmado : Revisão manual (UI)
-    Confirmado --> Cru : Reset parcial (limpar_categorias_confirmadas)
+    Confirmado --> Cru : Reset parcial (limpar_categorias_para_reclassificacao)
     Sugerido --> Cru : Reset parcial
     Confirmado --> Cru : Reset total (limpar_classificacoes_completas)
     Sugerido --> Cru : Reset total
@@ -40,7 +40,7 @@ stateDiagram-v2
 | Cru | Sugerido | Classificação automática | `classificar_itens_pendentes()` | `classifiers/__init__.py:30` |
 | Cru | Confirmado | Classificação automática (confirmar) | `classificar_itens_pendentes(confirmar=True)` | `classifiers/__init__.py:30` |
 | Sugerido | Confirmado | Revisão manual | `registrar_revisoes_manuais(confirmar=True)` | `database/__init__.py:1385` |
-| Confirmado | Cru | Reset parcial | `limpar_categorias_confirmadas()` | `database/__init__.py:682` |
+| Confirmado | Cru | Reset parcial (zera sugerida e confirmada) | `limpar_categorias_para_reclassificacao()` | `database/__init__.py:1277` |
 | Qualquer | Cru | Reset total | `limpar_classificacoes_completas()` | `database/__init__.py:653` |
 
 ---

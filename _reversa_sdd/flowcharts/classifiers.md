@@ -9,7 +9,7 @@ flowchart TD
     A[classificar_itens_pendentes] --> B{limpar_confirmadas_antes?}
     B -->|Sim| C{Limpar classificações}
     C -->|forcar_llm| D[limpar_classificacoes_completas]
-    C -->|normal| E[limpar_categorias_confirmadas]
+    C -->|normal| E[limpar_categorias_para_reclassificacao]
     B -->|Não| F[Buscar itens pendentes]
     D --> F
     E --> F
