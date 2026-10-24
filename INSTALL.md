@@ -68,10 +68,11 @@ uv pip sync requirements.txt
 ### Atualização de dependências
 
 - Edite apenas `pyproject.toml` ao adicionar/remover dependências de alto nível.
-- Não altere `requirements.txt` manualmente; regenere-o com:
+- Não altere `requirements.txt` manualmente; ele é exportado do `uv.lock`. Regenere-o com:
 
 ```powershell
-uv pip compile pyproject.toml --all-extras -o requirements.txt
+uv lock --upgrade
+uv export --format requirements-txt --no-hashes --all-extras --no-emit-project -o requirements.txt
 ```
 
 - Se precisar instalar o arquivo compilado sem `uv`, use:
