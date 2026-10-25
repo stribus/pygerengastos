@@ -1883,17 +1883,17 @@ def _registrar_embeddings_para_produto(produto: ProdutoPadronizado) -> None:
 		pass
 
 
-def _atualizar_embeddings_pos_validacao(
-	itens_validados: Sequence[Mapping[str, Any]],
-	*,
-	db_path: Path | str | None = None
+def _indexar_embeddings_dos_itens(
+	con: sqlite3.Connection,
+	itens: Sequence[Mapping[str, Any]],
 ) -> None:
-	"""Atualiza embeddings no ChromaDB após validação manual do usuário.
+	"""Indexa no Chroma a descrição original de cada item com o produto já gravado.
 
-	Para cada item validado, indexa a descrição original com:
-	- nome_base (produto validado)
-	- marca_base (marca validada)
-	- categoria (categoria validada)
+	Lê do próprio item o produto_id, o nome canônico e a marca, para que o cache
+	semântico devolva o produto consolidado (e não o nome sugerido pelo LLM).
+	Só indexa quando a classificação trouxe um produto (nome ou produto_id): o
+	nome gerado automaticamente na importação não é confiável para o cache.
+	Itens sem produto ou sem categoria são ignorados.
 	"""
 	try:
 		from src.classifiers.embeddings import upsert_descricao_embedding
@@ -1901,86 +1901,25 @@ def _atualizar_embeddings_pos_validacao(
 		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
 		return
 
-	with conexao(db_path) as con:
-		for item in itens_validados:
-			chave = item.get("chave_acesso")
-			seq = item.get("sequencia")
-
-			if not chave or seq is None:
-				continue
-
-			# Busca descrição original do item
-			row = con.execute(
-				"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
-				[chave, seq]
-			).fetchone()
-
-			if not row or not row[0]:
-				continue
-
-			descricao_original = row[0]
-			produto_nome = item.get("produto_nome")
-			produto_marca = item.get("produto_marca")
-			categoria = item.get("categoria")
-
-			# Só atualiza se tiver pelo menos nome e categoria
-			if not produto_nome or not categoria:
-				continue
-
-			try:
-				upsert_descricao_embedding(
-					descricao_original=descricao_original,
-					nome_base=produto_nome,
-					marca_base=produto_marca,
-					categoria=categoria,
-					produto_id=None  # Não precisamos do produto_id aqui
-				)
-				logger.debug(
-					f"Embedding atualizado para '{descricao_original}': "
-					f"{produto_nome} ({produto_marca}) - {categoria}"
-				)
-			except Exception as e:
-				logger.warning(f"Erro ao atualizar embedding para '{descricao_original}': {e}")
-				continue
-
-
-def _atualizar_embeddings_pos_classificacao(
-	dados_classificacao: Sequence[Mapping[str, Any]],
-	con: sqlite3.Connection
-) -> None:
-	"""Atualiza embeddings após classificação automática (LLM ou cache).
-
-	Registra descrições originais com suas classificações para reutilização futura.
-	"""
-	try:
-		from src.classifiers.embeddings import upsert_descricao_embedding
-	except ImportError:
-		return
-
-	for item in dados_classificacao:
+	for item in itens:
 		chave = item.get("chave_acesso")
 		seq = item.get("sequencia")
-
-		if not chave or seq is None:
-			continue
-
-		# Busca descrição original
-		row = con.execute(
-			"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
-			[chave, seq]
-		).fetchone()
-
-		if not row or not row[0]:
-			continue
-
-		descricao_original = row[0]
-		produto_nome = item.get("produto_nome")
 		categoria = item.get("categoria")
-		produto_marca = item.get("produto_marca")
-
-		# Só registra se tiver nome e categoria (classificação completa)
-		if not produto_nome or not categoria:
+		if not chave or seq is None or not categoria:
 			continue
+		if not item.get("produto_nome") and not item.get("produto_id"):
+			continue
+
+		row = con.execute(
+			"""
+			SELECT descricao, produto_id, produto_nome, produto_marca
+			FROM itens WHERE chave_acesso = ? AND sequencia = ?
+			""",
+			[chave, seq],
+		).fetchone()
+		if not row or not row[0] or not row[2]:
+			continue
+		descricao_original, produto_id, produto_nome, produto_marca = row
 
 		try:
 			upsert_descricao_embedding(
@@ -1988,15 +1927,28 @@ def _atualizar_embeddings_pos_classificacao(
 				nome_base=produto_nome,
 				marca_base=produto_marca,
 				categoria=categoria,
-				produto_id=None
-			)
-			logger.debug(
-				f"Embedding registrado após classificação: '{descricao_original}' -> "
-				f"{produto_nome} ({produto_marca}) - {categoria}"
+				produto_id=produto_id,
 			)
 		except Exception as e:
-			logger.warning(f"Erro ao registrar embedding para '{descricao_original}': {e}")
-			continue
+			logger.warning(f"Erro ao atualizar embedding para '{descricao_original}': {e}")
+
+
+def _atualizar_embeddings_pos_validacao(
+	itens_validados: Sequence[Mapping[str, Any]],
+	*,
+	db_path: Path | str | None = None
+) -> None:
+	"""Atualiza embeddings no ChromaDB após validação manual do usuário."""
+	with conexao(db_path) as con:
+		_indexar_embeddings_dos_itens(con, itens_validados)
+
+
+def _atualizar_embeddings_pos_classificacao(
+	dados_classificacao: Sequence[Mapping[str, Any]],
+	con: sqlite3.Connection
+) -> None:
+	"""Atualiza embeddings após classificação automática (LLM ou cache)."""
+	_indexar_embeddings_dos_itens(con, dados_classificacao)
 
 
 def _converter_data_iso_e_data(texto: str | None) -> tuple[str | None, str | None]:
@@ -2950,7 +2902,9 @@ def consolidar_produtos(
 	embeddings_atualizados = 0
 	try:
 		from src.classifiers.embeddings import atualizar_produto_id_embeddings
-		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
+		embeddings_atualizados = atualizar_produto_id_embeddings(
+			produto_id_origem, produto_id_destino, nome_base=nome_final_usado or nome_destino
+		)
 
 		# Atualizar auditoria com count de embeddings
 		if auditoria_id is not None:

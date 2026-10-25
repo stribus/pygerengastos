@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Callable, Iterable, Sequence
 
 from src.database import (
@@ -181,7 +183,8 @@ def classificar_itens_pendentes(
 							modelo="all-MiniLM-L6-v2",
 							observacoes=f"Match semântico com descrição: {match.get('descricao_original', '')}",
 							produto_nome=match.get("nome_base"),
-							produto_marca=match.get("marca_base"),
+							produto_marca=_marca_confiavel(match, item.descricao),
+							produto_id=match.get("produto_id"),
 						)
 					)
 					continue
@@ -236,6 +239,33 @@ def classificar_itens_pendentes(
 	return resultados_finais
 
 
+# Acima disso, a descrição é praticamente igual à indexada e a marca pode ser herdada
+_SCORE_DESCRICAO_IDENTICA = 0.99
+
+
+def _normalizar_para_comparacao(texto: str) -> str:
+	sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+	return " ".join(re.sub(r"[^A-Za-z0-9]+", " ", sem_acento).upper().split())
+
+
+def _marca_confiavel(match: dict, descricao: str) -> str | None:
+	"""Marca do match semântico, só quando ela vale para a descrição do item.
+
+	O vizinho mais próximo pode ser de outra marca ("SCOXA FGO SEARA" casa com
+	"SCOXA FGO SADIA"). A marca é herdada se a descrição for praticamente igual
+	à indexada ou se a marca aparecer na própria descrição; senão fica vazia
+	para o LLM ou a revisão manual preencherem.
+	"""
+	marca = (match.get("marca_base") or "").strip()
+	if not marca:
+		return None
+	if (match.get("score") or 0.0) >= _SCORE_DESCRICAO_IDENTICA:
+		return marca
+	marca_norm = _normalizar_para_comparacao(marca)
+	descricao_norm = f" {_normalizar_para_comparacao(descricao or '')} "
+	return marca if marca_norm and f" {marca_norm} " in descricao_norm else None
+
+
 def _salvar_resultados(
 	resultados: Iterable[ClassificacaoResultado],
 	*,
@@ -254,6 +284,7 @@ def _salvar_resultados(
 			"resposta_json": resultado.resposta_json,
 			"produto_nome": resultado.produto_nome,
 			"produto_marca": resultado.produto_marca,
+			"produto_id": resultado.produto_id,
 		}
 		for resultado in resultados
 	]
