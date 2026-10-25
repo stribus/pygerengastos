@@ -77,3 +77,10 @@ def test_medida_base_unidade_com_tamanho_vira_peso_ou_volume():
 def test_medida_base_sem_tamanho_fica_na_unidade_de_venda():
 	assert medida_base(1, "UNID", "CERVEJA SPATEN PURO") == (1, "UN")
 	assert medida_base(1, "CXA1", "CERVEJA SPATEN") == (1, "CX")
+
+
+def test_medida_base_tamanho_informado_vale_sobre_a_descricao():
+	"""Tamanho digitado na revisão completa a descrição truncada pelo mercado."""
+	assert medida_base(2, "UNID", "CHOPP TRADICIONAL TU", "1L") == (2.0, "L")
+	qtd, unidade = medida_base(1, "UN", "CERVEJA 350ML", "473 ml")
+	assert (round(qtd, 3), unidade) == (0.473, "L")

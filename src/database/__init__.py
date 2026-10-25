@@ -21,7 +21,7 @@ from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 from src.logger import setup_logging
-from src.medidas import medida_base
+from src.medidas import extrair_tamanho, medida_base
 
 logger = setup_logging("database")
 
@@ -293,6 +293,7 @@ class ItemNotaRevisao:
 	categoria_confirmada: str | None
 	produto_nome: str | None
 	produto_marca: str | None
+	tamanho: str | None = None
 
 
 @dataclass(slots=True)
@@ -642,6 +643,7 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
 		"ALTER TABLE notas ADD COLUMN desconto DECIMAL(18, 2)",
+		"ALTER TABLE itens ADD COLUMN tamanho TEXT",
 	]
 
 	for migration in migrations:
@@ -968,7 +970,8 @@ def listar_itens_para_revisao(
 			categoria_sugerida,
 			categoria_confirmada,
 			produto_nome,
-			produto_marca
+			produto_marca,
+			tamanho
 		FROM itens
 		WHERE {' AND '.join(condicoes)}
 		ORDER BY sequencia
@@ -988,6 +991,7 @@ def listar_itens_para_revisao(
 			categoria_confirmada=row[6],
 			produto_nome=row[7],
 			produto_marca=row[8],
+			tamanho=row[9],
 		)
 		for row in rows
 	]
@@ -1404,6 +1408,20 @@ def registrar_revisoes_manuais(
 	usuario_limpo = _limpar_texto_curto(usuario)
 	observacao_padrao = _limpar_texto_curto(observacoes_padrao)
 
+	# Tamanho da embalagem informado na revisão ("473ml"): validado antes de
+	# gravar qualquer coisa; vazio remove o informado
+	tamanhos: list[tuple[str | None, str, int]] = []
+	for registro in registros:
+		if "tamanho" not in registro or not registro.get("chave_acesso") or registro.get("sequencia") is None:
+			continue
+		tamanho = " ".join((registro.get("tamanho") or "").upper().split()) or None
+		if tamanho and extrair_tamanho(tamanho) is None:
+			raise ValueError(
+				f"Tamanho '{registro.get('tamanho')}' inválido no item {registro['sequencia']}: "
+				"use peso ou volume, como 500g, 1kg, 473ml ou 2l."
+			)
+		tamanhos.append((tamanho, registro["chave_acesso"], int(registro["sequencia"])))
+
 	itens_para_classificar: list[dict[str, Any]] = []
 	logs: list[tuple[object, ...]] = []
 
@@ -1448,6 +1466,10 @@ def registrar_revisoes_manuais(
 				bool(confirmar),
 			)
 		)
+
+	if tamanhos:
+		with conexao(db_path) as con:
+			con.executemany("UPDATE itens SET tamanho = ? WHERE chave_acesso = ? AND sequencia = ?", tamanhos)
 
 	if not itens_para_classificar:
 		return
@@ -2354,6 +2376,7 @@ def _compras_por_medida(
 			i.quantidade,
 			i.unidade,
 			i.descricao,
+			i.tamanho,
 			i.valor_total
 		FROM itens i
 		JOIN produtos p ON p.id = i.produto_id
@@ -2367,8 +2390,8 @@ def _compras_por_medida(
 
 	compras = []
 	gasto_por_unidade: dict[tuple[str, str], float] = {}
-	for produto, ano_mes, quantidade, unidade, descricao, valor_total in rows:
-		qtd_base, unidade_base = medida_base(float(quantidade), unidade, descricao)
+	for produto, ano_mes, quantidade, unidade, descricao, tamanho, valor_total in rows:
+		qtd_base, unidade_base = medida_base(float(quantidade), unidade, descricao, tamanho)
 		valor = float(valor_total)
 		compras.append({
 			"produto_nome": produto,

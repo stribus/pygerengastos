@@ -70,18 +70,24 @@ def extrair_tamanho(descricao: str | None) -> tuple[float, str] | None:
 	return valor, unidade_base
 
 
-def medida_base(quantidade: float, unidade: str | None, descricao: str | None) -> tuple[float, str]:
+def medida_base(
+	quantidade: float,
+	unidade: str | None,
+	descricao: str | None,
+	tamanho_informado: str | None = None,
+) -> tuple[float, str]:
 	"""Quantidade comprada na medida base: (quantidade, "KG"|"L"|"UN"|"CX").
 
 	Vendido por peso ou volume: a quantidade já está em KG/L. Vendido por
-	unidade com tamanho na descrição: quantidade × tamanho. Sem tamanho: a
-	quantidade fica na unidade de venda.
+	unidade com tamanho conhecido: quantidade × tamanho. Sem tamanho: a
+	quantidade fica na unidade de venda. O ``tamanho_informado`` na revisão
+	("473ml") vale sobre o da descrição, que o mercado às vezes trunca.
 	"""
 	unidade_venda = normalizar_unidade(unidade)
 	if unidade_venda in ("KG", "L"):
 		return quantidade, unidade_venda
 
-	tamanho = extrair_tamanho(descricao)
+	tamanho = extrair_tamanho(tamanho_informado) or extrair_tamanho(descricao)
 	if tamanho is None:
 		return quantidade, unidade_venda
 	return quantidade * tamanho[0], tamanho[1]

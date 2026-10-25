@@ -143,6 +143,7 @@ def _montar_editor(itens: List[ItemNotaRevisao]) -> pd.DataFrame:
                 "produto_marca": item.produto_marca or "",
                 "quantidade": float(item.quantidade or 0),
                 "valor_total": float(item.valor_total or 0),
+                "tamanho": item.tamanho or "",
             }
         )
     return pd.DataFrame(linhas)
@@ -158,6 +159,7 @@ def _converter_registros(df: pd.DataFrame, chave_acesso: str, observacoes: str |
                 "categoria": (linha.get("categoria") or "").strip() or None,
                 "produto_nome": (linha.get("produto_nome") or "").strip() or None,
                 "produto_marca": (linha.get("produto_marca") or "").strip() or None,
+                "tamanho": linha["tamanho"] if isinstance(linha.get("tamanho"), str) else "",
                 "observacoes": (observacoes or "").strip() or None,
             }
         )
@@ -250,6 +252,11 @@ def render_pagina_analise() -> None:
                 "categoria": st.column_config.TextColumn("Categoria"),
                 "produto_nome": st.column_config.TextColumn("Produto (nome base)"),
                 "produto_marca": st.column_config.TextColumn("Marca"),
+                "tamanho": st.column_config.TextColumn(
+                    "Tamanho",
+                    help="Peso ou volume da embalagem (ex.: 473ml, 1kg), só quando a "
+                         "descrição não traz. Usado no preço por kg/litro dos relatórios.",
+                ),
             },
         )
 
