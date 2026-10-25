@@ -116,3 +116,83 @@ def test_descricao_passa_a_apontar_para_o_produto_escolhido(tmp_path):
 	outra = _salvar(db_path, "6", ["CHOPP STIER PILSEN P"])
 
 	assert _item(db_path, outra, 1)[0] == chopp.id
+
+
+# ---------------------------------------------------------------------------
+# Consolidação: nome unificado nos itens da origem E do destino; marca preservada
+# ---------------------------------------------------------------------------
+
+def _produto_do_item(db_path, chave: str, seq: int) -> int:
+	return _item(db_path, chave, seq)[0]
+
+
+def _preparar_consolidacao(db_path):
+	"""Destino "Coxa Frango" com item gravado como "Coxa de Frango" (dado real) e origem "Sobrecoxa"."""
+	chave = _salvar(db_path, "7", ["SCOXA FGO SADIA IQF 1KG", "SOBRECOXAS TEMP AVE"])
+	with conexao(db_path) as con:
+		destino = _criar_produto(con, "Coxa Frango", "Lar")
+		origem = _criar_produto(con, "Sobrecoxa", None)
+		con.execute(
+			"UPDATE itens SET produto_id = ?, produto_nome = 'Coxa de Frango', produto_marca = 'Sadia' WHERE sequencia = 1",
+			[destino.id],
+		)
+		con.execute(
+			"UPDATE itens SET produto_id = ?, produto_nome = 'Sobrecoxa', produto_marca = NULL WHERE sequencia = 2",
+			[origem.id],
+		)
+	return chave, origem.id, destino.id
+
+
+def test_consolidacao_unifica_nome_dos_itens_do_destino_tambem(tmp_path):
+	"""Regressão: só os itens da origem eram renomeados; os do destino ficavam com o nome antigo."""
+	from src.database import consolidar_produtos
+
+	db_path = tmp_path / "t.db"
+	chave, origem, destino = _preparar_consolidacao(db_path)
+
+	consolidar_produtos(origem, destino, db_path=db_path)
+
+	assert _item(db_path, chave, 1) == (destino, "Coxa Frango", "Sadia")
+	assert _item(db_path, chave, 2) == (destino, "Coxa Frango", None)
+
+
+def test_consolidacao_com_nome_final_usa_o_nome_efetivamente_gravado(tmp_path):
+	"""Com conflito, o produto recebe sufixo "(1)": os itens devem receber esse mesmo nome."""
+	from src.database import consolidar_produtos
+
+	db_path = tmp_path / "t.db"
+	chave, origem, destino = _preparar_consolidacao(db_path)
+	with conexao(db_path) as con:
+		_criar_produto(con, "Coxa de Frango", "Lar")  # força o sufixo no destino
+
+	resultado = consolidar_produtos(origem, destino, nome_final="Coxa de Frango", db_path=db_path)
+
+	assert resultado["nome_final_usado"] == "Coxa de Frango (1)"
+	assert _item(db_path, chave, 1)[1] == "Coxa de Frango (1)"
+	assert _item(db_path, chave, 2)[1] == "Coxa de Frango (1)"
+
+
+def test_consolidacao_conta_apenas_itens_migrados_da_origem(tmp_path):
+	from src.database import consolidar_produtos
+
+	db_path = tmp_path / "t.db"
+	_, origem, destino = _preparar_consolidacao(db_path)
+
+	resultado = consolidar_produtos(origem, destino, db_path=db_path)
+
+	assert resultado["itens_migrados"] == 1
+
+
+def test_historico_registra_o_nome_efetivamente_gravado(tmp_path):
+	from src.database import consolidar_produtos
+
+	db_path = tmp_path / "t.db"
+	_, origem, destino = _preparar_consolidacao(db_path)
+	with conexao(db_path) as con:
+		_criar_produto(con, "Coxa de Frango", "Lar")
+
+	consolidar_produtos(origem, destino, nome_final="Coxa de Frango", db_path=db_path)
+
+	with conexao(db_path) as con:
+		nome = con.execute("SELECT nome_destino FROM consolidacoes_historico").fetchone()[0]
+	assert nome == "Coxa de Frango (1)"

@@ -2871,18 +2871,24 @@ def consolidar_produtos(
 				)
 				nome_final_usado = nome_final_strip
 
-			# Migrar itens
+			# Migrar itens da origem e alinhar o nome dos itens de origem E destino
+			# ao nome efetivo do produto (com o eventual sufixo de conflito). A marca
+			# de cada item é preservada: o produto consolidado pode reunir marcas.
 			itens_migrados = con.execute(
+				"SELECT COUNT(*) FROM itens WHERE produto_id = ?",
+				[produto_id_origem],
+			).fetchone()[0]
+			con.execute(
 				"""
 				UPDATE itens
 				SET
 					produto_id = ?,
-					produto_nome = COALESCE(?, produto_nome),
+					produto_nome = ?,
 					atualizado_em = CURRENT_TIMESTAMP
-				WHERE produto_id = ?
+				WHERE produto_id IN (?, ?)
 				""",
-				[produto_id_destino, nome_final or destino_row[0] or None, produto_id_origem]
-			).rowcount
+				[produto_id_destino, nome_final_usado or nome_destino, produto_id_origem, produto_id_destino]
+			)
 
 			# Migrar aliases reapontando-os para o destino.
 			# aliases_produtos tem UNIQUE (texto_original) global, então cada texto
@@ -2908,7 +2914,7 @@ def consolidar_produtos(
 					produto_id_origem,
 					produto_id_destino,
 					nome_origem,
-					nome_final or nome_destino,
+					nome_final_usado or nome_destino,
 					usuario or "sistema",
 					observacoes or None,
 					itens_migrados,
