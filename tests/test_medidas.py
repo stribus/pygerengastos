@@ -112,25 +112,3 @@ def test_tamanho_detectado_para_exibir(descricao, esperado):
 		valor, unidade = extrair_tamanho(texto)
 		assert unidade == extrair_tamanho(descricao)[1]
 		assert valor == pytest.approx(extrair_tamanho(descricao)[0])
-
-
-@pytest.mark.parametrize(
-	"descricao, esperado",
-	[
-		("AGUA SARANDI C/GAS 2L", "2L"),
-		("OLEO LILAS CANOLA 900ML", "900ML"),
-		("SALG MEGA MILHO SABOR QUEIJO 140G", "140G"),
-		("ARROZ PIEMONT BCO T1 1KG", "1KG"),
-		("CERVEJA 6X350ML", "2,1L"),
-		("PAO FRANCES KG", ""),
-		("CERVEJA SPATEN PURO", ""),
-	],
-)
-def test_tamanho_detectado_para_exibir(descricao, esperado):
-	"""O texto exibido volta ao mesmo tamanho quando lido de novo."""
-	texto = tamanho_detectado(descricao)
-	assert texto == esperado
-	if texto:
-		valor, unidade = extrair_tamanho(texto)
-		assert unidade == extrair_tamanho(descricao)[1]
-		assert valor == pytest.approx(extrair_tamanho(descricao)[0])

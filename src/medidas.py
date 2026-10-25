@@ -108,17 +108,3 @@ def tamanho_detectado(descricao: str | None) -> str:
 	if valor < 1:
 		valor, unidade = valor * 1000, {"KG": "G", "L": "ML"}[unidade]
 	return f"{round(valor, 3):g}".replace(".", ",") + unidade
-
-
-def tamanho_detectado(descricao: str | None) -> str:
-	"""Tamanho da descrição em texto para exibir ("2L", "900ML", "140G"), ou "".
-
-	Volta a ser lido por extrair_tamanho com o mesmo valor.
-	"""
-	tamanho = extrair_tamanho(descricao)
-	if tamanho is None:
-		return ""
-	valor, unidade = tamanho
-	if valor < 1:
-		valor, unidade = valor * 1000, {"KG": "G", "L": "ML"}[unidade]
-	return f"{round(valor, 3):g}".replace(".", ",") + unidade

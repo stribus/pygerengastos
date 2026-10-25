@@ -602,8 +602,12 @@ class LLMClassifier:
 		for modelo in self._resolver_model_priority(model_priority):
 			if not pendentes:
 				break
-			config = self._obter_config_modelo(modelo)
-			api_key = self._obter_api_key(config)
+			try:
+				config = self._obter_config_modelo(modelo)
+				api_key = self._obter_api_key(config)
+			except Exception as exc:  # noqa: BLE001 - o tamanho nunca bloqueia a classificação
+				logger.warning("Modelo %s indisponível para tamanhos: %s", modelo, _resumir_erro(exc))
+				continue
 			if not api_key:
 				continue
 			com_erro: list[ItemParaClassificacao] = []

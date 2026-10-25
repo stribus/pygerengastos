@@ -783,3 +783,12 @@ def test_sugerir_tamanhos_sem_modelo_disponivel_retorna_vazio(monkeypatch):
 	monkeypatch.setattr(LLMClassifier, "_obter_api_key", lambda self, config: None)
 
 	assert LLMClassifier(api_key="fake").sugerir_tamanhos([_item(1)], model_priority=["modelo-a"]) == {}
+
+
+def test_sugerir_tamanhos_nao_lanca_se_a_configuracao_do_modelo_falhar(monkeypatch):
+	def _falhar(self, modelo):  # type: ignore[override]
+		raise RuntimeError("TOML inválido")
+
+	monkeypatch.setattr(LLMClassifier, "_obter_config_modelo", _falhar)
+
+	assert LLMClassifier(api_key="fake").sugerir_tamanhos([_item(1)], model_priority=["modelo-a"]) == {}
