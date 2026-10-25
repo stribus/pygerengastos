@@ -1243,22 +1243,24 @@ def registrar_classificacao_itens(
 				# Caso contrário, apenas em categoria_sugerida
 				confirmar_item = bool(item.get("confirmar")) or confirmar
 
-				# Se tivermos info de produto, tentamos resolver/criar o produto
+				# Resolver o produto: o produto_id vindo do cache semântico tem
+				# prioridade; senão, busca/cria pelo nome (a marca fica no item)
 				produto_id = None
-				if prod_nome:
+				produto_obj = _buscar_produto_por_id(con, item.get("produto_id"))
+				if produto_obj is None and prod_nome:
 					produto_obj = _resolver_produto_por_nome_marca(con, prod_nome, prod_marca, cat)
-					if produto_obj:
-						produto_id = produto_obj.id
-						# Se o produto foi retornado mas sem categoria, e temos uma categoria válida, atualiza
-						if produto_obj.categoria_id is None and categoria_id is not None:
-							try:
-								con.execute(
-									"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
-									[categoria_id, produto_id]
-								)
-								logger.debug(f"Categoria {cat} associada ao produto {produto_id} durante classificação")
-							except Exception as e:
-								logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
+				if produto_obj:
+					produto_id = produto_obj.id
+					# Se o produto foi retornado mas sem categoria, e temos uma categoria válida, atualiza
+					if produto_obj.categoria_id is None and categoria_id is not None:
+						try:
+							con.execute(
+								"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+								[categoria_id, produto_id]
+							)
+							logger.debug(f"Categoria {cat} associada ao produto {produto_id} durante classificação")
+						except Exception as e:
+							logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
 
 				# Montar update dinâmico
 				sql_update = """
@@ -1286,13 +1288,18 @@ def registrar_classificacao_itens(
 						sql_update += ", categoria_confirmada_id = NULL"
 
 				if produto_id:
+					# Nome canônico do produto (evita "Batata branca" x "Batata Branca"
+					# separados nos relatórios); a marca é a do próprio item
 					sql_update += ", produto_id = ?, produto_nome = ?, produto_marca = ?"
-					params.extend([produto_id, prod_nome, prod_marca])
+					params.extend([produto_id, produto_obj.nome_base, prod_marca])
 
 				sql_update += " WHERE chave_acesso = ? AND sequencia = ?"
 				params.extend([chave, seq])
 
 				con.execute(sql_update, params)
+
+				if produto_id:
+					_apontar_alias_da_descricao(con, chave, seq, produto_id)
 
 			con.execute("COMMIT")
 
@@ -1520,13 +1527,62 @@ def listar_revisoes_manuais(
 	]
 
 
+def _buscar_produto_por_id(
+	con: sqlite3.Connection, produto_id: Any
+) -> ProdutoPadronizado | None:
+	"""Retorna o produto com o id informado, ou None se vazio/inexistente."""
+	try:
+		produto_id_int = int(produto_id)
+	except (TypeError, ValueError):
+		return None
+	row = con.execute(
+		"SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE id = ?",
+		[produto_id_int],
+	).fetchone()
+	if not row:
+		return None
+	return ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
+
+
+def _apontar_alias_da_descricao(
+	con: sqlite3.Connection, chave: str, sequencia: int, produto_id: int
+) -> None:
+	"""Faz a descrição original do item apontar para o produto escolhido.
+
+	Assim uma nova nota com a mesma descrição já é importada no produto certo
+	(a importação resolve o produto pelo alias antes de qualquer classificação).
+	"""
+	row = con.execute(
+		"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+		[chave, sequencia],
+	).fetchone()
+	descricao = (row[0] or "").strip() if row else ""
+	if not descricao:
+		return
+	cursor = con.execute(
+		"UPDATE aliases_produtos SET produto_id = ? WHERE lower(texto_original) = lower(?)",
+		[produto_id, descricao],
+	)
+	if cursor.rowcount == 0:
+		con.execute(
+			"INSERT OR IGNORE INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+			[produto_id, descricao],
+		)
+
+
 def _resolver_produto_por_nome_marca(
 	con: sqlite3.Connection,
 	nome: str,
 	marca: str | None,
 	categoria_nome: str | None
 ) -> ProdutoPadronizado | None:
-	"""Busca ou cria um produto com base no nome e marca normalizados."""
+	"""Busca ou cria um produto pelo nome (sem diferenciar maiúsculas).
+
+	O produto é o conceito genérico ("Chopp"); a marca de cada compra fica no
+	item. Havendo mais de um produto com o mesmo nome (duplicatas antigas por
+	marca), prefere o de mesma marca, depois o com mais itens. A marca só é
+	gravada no produto quando ele é criado.
+	"""
 
 	nome = nome.strip()
 	if not nome:
@@ -1541,15 +1597,17 @@ def _resolver_produto_por_nome_marca(
 		if cat_row:
 			categoria_id = cat_row[0]
 
-	# Tenta achar exato
-	query_busca = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
-	params_busca = [nome]
-
-	if marca:
-		query_busca += " AND lower(marca_base) = lower(?)"
-		params_busca.append(marca)
-	else:
-		query_busca += " AND marca_base IS NULL"
+	query_busca = """
+		SELECT p.id, p.nome_base, p.marca_base, p.categoria_id
+		FROM produtos p
+		WHERE lower(p.nome_base) = lower(?)
+		ORDER BY
+			lower(COALESCE(p.marca_base, '')) = lower(COALESCE(?, '')) DESC,
+			(SELECT COUNT(*) FROM itens i WHERE i.produto_id = p.id) DESC,
+			p.id
+		LIMIT 1
+	"""
+	params_busca = [nome, marca]
 
 	row = con.execute(query_busca, params_busca).fetchone()
 	if row:

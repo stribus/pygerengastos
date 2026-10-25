@@ -1,0 +1,118 @@
+"""Testes da identidade do produto: produto = nome (sem caixa); marca fica no item."""
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from src.database import (
+	_criar_produto,
+	conexao,
+	registrar_classificacao_itens,
+	salvar_nota,
+)
+from src.scrapers.receita_rs import NotaFiscal, NotaItem
+
+
+@pytest.fixture(autouse=True)
+def _sem_embeddings(monkeypatch):
+	"""Os testes de identidade não precisam do Chroma nem do modelo."""
+	import src.database as database
+
+	monkeypatch.setattr(database, "_registrar_embeddings_para_produto", lambda produto: None)
+	monkeypatch.setattr(database, "_atualizar_embeddings_pos_classificacao", lambda dados, con: None)
+
+
+def _salvar(db_path, chave_digito: str, descricoes: list[str]) -> str:
+	chave = chave_digito * 44
+	itens = [
+		NotaItem(descricao=d, codigo=None, quantidade=Decimal("1"), unidade="UN",
+		         valor_unitario=Decimal("10"), valor_total=Decimal("10"))
+		for d in descricoes
+	]
+	salvar_nota(NotaFiscal(chave_acesso=chave, emissao="10/01/2025 10:00:00", itens=itens), db_path=db_path)
+	return chave
+
+
+def _classificar(db_path, chave: str, seq: int, nome: str, marca: str | None, **extra) -> None:
+	registrar_classificacao_itens(
+		[{"chave_acesso": chave, "sequencia": seq, "categoria": "Bebidas",
+		  "produto_nome": nome, "produto_marca": marca, **extra}],
+		db_path=db_path,
+	)
+
+
+def _item(db_path, chave: str, seq: int) -> tuple:
+	with conexao(db_path) as con:
+		return con.execute(
+			"SELECT produto_id, produto_nome, produto_marca FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+			[chave, seq],
+		).fetchone()
+
+
+def _produtos_com_nome(db_path, nome: str) -> int:
+	with conexao(db_path) as con:
+		return con.execute("SELECT COUNT(*) FROM produtos WHERE lower(nome_base) = lower(?)", [nome]).fetchone()[0]
+
+
+def test_nome_existente_com_outra_marca_reusa_o_produto(tmp_path):
+	"""Regressão: "Chopp / Bairrista" criava um produto novo e desfazia a consolidação."""
+	db_path = tmp_path / "t.db"
+	with conexao(db_path) as con:
+		chopp = _criar_produto(con, "Chopp", "Tupiniquim")
+	chave = _salvar(db_path, "1", ["CHOPP BAIRRISTA PET 1L"])
+
+	_classificar(db_path, chave, 1, "chopp", "Bairrista")
+
+	assert _item(db_path, chave, 1) == (chopp.id, "Chopp", "Bairrista")
+	assert _produtos_com_nome(db_path, "Chopp") == 1
+
+
+def test_varios_produtos_com_mesmo_nome_prefere_a_mesma_marca(tmp_path):
+	"""Duplicatas antigas por marca: o item vai para a de mesma marca, se existir."""
+	db_path = tmp_path / "t.db"
+	with conexao(db_path) as con:
+		_criar_produto(con, "Cerveja", "Spaten")
+		budweiser = _criar_produto(con, "Cerveja", "Budweiser")
+	chave = _salvar(db_path, "2", ["CERV BUDWEISER 473ML"])
+
+	_classificar(db_path, chave, 1, "Cerveja", "budweiser")
+
+	assert _item(db_path, chave, 1)[0] == budweiser.id
+
+
+def test_nome_novo_cria_produto(tmp_path):
+	db_path = tmp_path / "t.db"
+	chave = _salvar(db_path, "3", ["KOMBUCHA GENGIBRE 300ML"])
+
+	_classificar(db_path, chave, 1, "Kombucha", "Tao")
+
+	produto_id, nome, marca = _item(db_path, chave, 1)
+	assert (nome, marca) == ("Kombucha", "Tao")
+	assert _produtos_com_nome(db_path, "Kombucha") == 1
+
+
+def test_produto_id_informado_pelo_cache_e_respeitado(tmp_path):
+	"""O match semântico traz o produto_id: ele vale mesmo se o nome sugerido divergir."""
+	db_path = tmp_path / "t.db"
+	with conexao(db_path) as con:
+		agua = _criar_produto(con, "Água c/gás 2L", "Água da Pedra")
+	chave = _salvar(db_path, "4", ["AGUA DA PEDRA 2L C G"])
+
+	_classificar(db_path, chave, 1, "Água Mineral com gás", None, produto_id=agua.id)
+
+	assert _item(db_path, chave, 1) == (agua.id, "Água c/gás 2L", None)
+	assert _produtos_com_nome(db_path, "Água Mineral com gás") == 0
+
+
+def test_descricao_passa_a_apontar_para_o_produto_escolhido(tmp_path):
+	"""Depois da classificação, uma nova nota com a mesma descrição já entra no produto certo."""
+	db_path = tmp_path / "t.db"
+	with conexao(db_path) as con:
+		chopp = _criar_produto(con, "Chopp", "Tupiniquim")
+	chave = _salvar(db_path, "5", ["CHOPP STIER PILSEN P"])
+	_classificar(db_path, chave, 1, "Chopp", "Stier")
+
+	outra = _salvar(db_path, "6", ["CHOPP STIER PILSEN P"])
+
+	assert _item(db_path, outra, 1)[0] == chopp.id
