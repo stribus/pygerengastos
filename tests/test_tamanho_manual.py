@@ -86,3 +86,25 @@ def test_tamanho_nao_e_gravado_se_a_confirmacao_falha(db_path):
 		)
 
 	assert listar_itens_para_revisao(CHAVE, db_path=db_path)[1].tamanho is None
+
+
+def test_tamanho_nao_e_gravado_se_a_classificacao_falha(db_path, monkeypatch):
+	import src.database as database
+
+	def falhar(*args, **kwargs):
+		raise RuntimeError("falha ao classificar")
+
+	monkeypatch.setattr(database, "registrar_classificacao_itens", falhar)
+	with pytest.raises(RuntimeError):
+		_revisar(db_path, "2l")
+
+	assert listar_itens_para_revisao(CHAVE, db_path=db_path)[1].tamanho is None
+
+
+def test_tamanho_e_gravado_em_rascunho_sem_categoria(db_path):
+	registrar_revisoes_manuais(
+		[{"chave_acesso": CHAVE, "sequencia": 2, "categoria": None, "tamanho": "2l"}],
+		db_path=db_path,
+	)
+
+	assert listar_itens_para_revisao(CHAVE, db_path=db_path)[1].tamanho == "2L"

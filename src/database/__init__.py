@@ -1467,14 +1467,15 @@ def registrar_revisoes_manuais(
 			)
 		)
 
+	if itens_para_classificar:
+		registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
+
 	if tamanhos:
 		with conexao(db_path) as con:
 			con.executemany("UPDATE itens SET tamanho = ? WHERE chave_acesso = ? AND sequencia = ?", tamanhos)
 
 	if not itens_para_classificar:
 		return
-
-	registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
 
 	# Atualizar embeddings quando o usuário confirma manualmente
 	if confirmar:
