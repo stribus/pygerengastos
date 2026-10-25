@@ -10,7 +10,9 @@ import pytest
 from src.database import (
     conexao,
     inicializar_banco,
-    obter_top_produtos_por_quantidade,
+    _criar_produto,
+    obter_compras_fora_da_unidade,
+    obter_top_produtos_por_gasto,
     obter_custos_unitarios_mensais,
     obter_meses_com_notas,
     obter_quantidades_mensais_produtos,
@@ -141,64 +143,47 @@ def db_com_dados_teste(tmp_path):
     return db_path
 
 
-def test_obter_top_produtos_por_quantidade(db_com_dados_teste):
-    """Testa ranking de produtos por quantidade total comprada."""
-    db_path = db_com_dados_teste
-    
-    top_produtos = obter_top_produtos_por_quantidade(
+def test_obter_top_produtos_por_gasto(db_com_dados_teste):
+    """Ranking por gasto: quantidades em unidades diferentes não são comparáveis."""
+    top_produtos = obter_top_produtos_por_gasto(
         data_inicio="2025-01-01",
         data_fim="2025-12-31",
         top_n=10,
-        db_path=db_path,
+        db_path=db_com_dados_teste,
     )
-    
-    # Deve retornar todos os produtos ordenados por quantidade
-    assert len(top_produtos) == 4
-    
-    # Verificar se está ordenado (maior quantidade primeiro)
-    quantidades = [p["quantidade_total"] for p in top_produtos]
-    assert quantidades == sorted(quantidades, reverse=True)
-    
-    # Primeiro produto deve ser Detergente (5+3=8 unidades)
-    assert top_produtos[0]["produto_nome"] == "Detergente Neutro"
-    assert top_produtos[0]["quantidade_total"] == 8.0
-    
-    # Produtos 2 e 3: Arroz (2+1+2=5) e Feijao (3+2=5) - ordem pode variar
-    produtos_5_unidades = {top_produtos[1]["produto_nome"], top_produtos[2]["produto_nome"]}
-    assert produtos_5_unidades == {"Arroz Branco", "Feijao Preto"}
-    assert top_produtos[1]["quantidade_total"] == 5.0
-    assert top_produtos[2]["quantidade_total"] == 5.0
+
+    assert [p["produto_nome"] for p in top_produtos] == [
+        "Arroz Branco", "Feijao Preto", "Detergente Neutro", "Sabao Po",
+    ]
+    # Arroz: 2x25 + 1x27 + 2x26
+    assert top_produtos[0]["gasto_total"] == pytest.approx(129.0)
+    assert all(p["produto_id"] for p in top_produtos)
 
 
 def test_obter_top_produtos_com_filtro_data(db_com_dados_teste):
     """Testa filtro de período no ranking de produtos."""
-    db_path = db_com_dados_teste
-    
-    # Apenas Janeiro
-    top_jan = obter_top_produtos_por_quantidade(
+    top_jan = obter_top_produtos_por_gasto(
         data_inicio="2025-01-01",
         data_fim="2025-01-31",
         top_n=10,
-        db_path=db_path,
+        db_path=db_com_dados_teste,
     )
-    
+
     # Apenas 3 produtos em janeiro
     assert len(top_jan) == 3
-    assert top_jan[0]["produto_nome"] == "Detergente Neutro"
-    assert top_jan[0]["quantidade_total"] == 5.0
+    assert top_jan[0]["produto_nome"] == "Arroz Branco"
+    assert top_jan[0]["gasto_total"] == pytest.approx(50.0)
 
 
 def test_obter_top_produtos_com_limit(db_com_dados_teste):
     """Testa limite de resultados no ranking."""
-    db_path = db_com_dados_teste
-    
-    top_2 = obter_top_produtos_por_quantidade(
+    top_2 = obter_top_produtos_por_gasto(
         data_inicio="2025-01-01",
         data_fim="2025-12-31",
         top_n=2,
-        db_path=db_path,
+        db_path=db_com_dados_teste,
     )
-    
+
     assert len(top_2) == 2
 
 
@@ -257,7 +242,7 @@ def test_obter_custos_unitarios_calcula_media_ponderada(db_com_dados_teste):
     """Testa se o custo médio é calculado corretamente (ponderado por quantidade)."""
     db_path = db_com_dados_teste
     
-    # Arroz em Janeiro: 2 unidades a 25.00 = custo unitário de 25.00
+    # Arroz em Janeiro: 2 pacotes de 5 kg a 25.00 = R$ 5,00/kg
     custos_arroz_jan = obter_custos_unitarios_mensais(
         ["Arroz Branco"],
         data_inicio="2025-01-01",
@@ -267,7 +252,7 @@ def test_obter_custos_unitarios_calcula_media_ponderada(db_com_dados_teste):
     
     assert len(custos_arroz_jan) == 1
     assert custos_arroz_jan[0]["ano_mes"] == "2025-01"
-    assert abs(custos_arroz_jan[0]["custo_unitario_medio"] - 25.00) < 0.01
+    assert abs(custos_arroz_jan[0]["custo_unitario_medio"] - 5.00) < 0.01
 
 
 def test_obter_unidades_produtos(db_com_dados_teste):
@@ -281,10 +266,10 @@ def test_obter_unidades_produtos(db_com_dados_teste):
     # Deve retornar unidade para cada produto
     assert len(unidades) == 3
     
-    # Todos os produtos de teste usam "UN"
-    assert unidades["Arroz Branco"] == "UN"
-    assert unidades["Feijao Preto"] == "UN"
-    assert unidades["Detergente Neutro"] == "UN"
+    # Vendidos por unidade, mas com o tamanho na descrição: medida base KG/L
+    assert unidades["Arroz Branco"] == "KG"
+    assert unidades["Feijao Preto"] == "KG"
+    assert unidades["Detergente Neutro"] == "L"
 
 
 def test_obter_unidades_produtos_lista_vazia(db_com_dados_teste):
@@ -306,6 +291,63 @@ def test_obter_unidades_produtos_inexistentes(db_com_dados_teste):
     )
     
     assert unidades == {}
+
+
+# ---------------------------------------------------------------------------
+# Preço por medida (R$/kg, R$/L) e unidade dominante
+# ---------------------------------------------------------------------------
+
+def _banco_um_produto(tmp_path, compras):
+    """Banco com um único produto "Coxa Frango"; compras = (data, descricao, preco, qtd, unidade)."""
+    db_path = tmp_path / "medida.db"
+    inicializar_banco(db_path=db_path)
+    for i, (data, descricao, preco, qtd, unidade) in enumerate(compras):
+        nota = _criar_nota_teste(str(i) * 44, data, [(descricao, Decimal(preco), Decimal(qtd), unidade)])
+        salvar_nota(nota, db_path=db_path)
+    with conexao(db_path) as con:
+        produto = _criar_produto(con, "Coxa Frango", None)
+        con.execute("UPDATE itens SET produto_id = ?, produto_nome = ?", [produto.id, produto.nome_base])
+    return db_path
+
+
+def test_peso_na_balanca_e_pacote_com_tamanho_formam_a_mesma_serie(tmp_path):
+    """Coxa a granel (KG) e pacote de 1 kg (UN) viram a mesma série em R$/kg."""
+    db_path = _banco_um_produto(tmp_path, [
+        ("2025-01-10", "COXA FRANGO", "9.39", "1.5", "KG"),
+        ("2025-04-10", "SCOXA FGO SEARA IQF 1KG", "15.80", "1", "UN"),
+    ])
+
+    custos = obter_custos_unitarios_mensais(["Coxa Frango"], db_path=db_path)
+
+    assert [(c["ano_mes"], round(c["custo_unitario_medio"], 2)) for c in custos] == [
+        ("2025-01", 9.39), ("2025-04", 15.80),
+    ]
+    assert obter_unidades_produtos(["Coxa Frango"], db_path=db_path) == {"Coxa Frango": "KG"}
+
+
+def test_custo_unitario_sem_divisao_inteira(tmp_path):
+    """Valores e quantidades inteiros não truncam o preço (7 / 2 = 3,50, não 3)."""
+    db_path = _banco_um_produto(tmp_path, [("2025-01-10", "COXA FRANGO", "3.50", "2", "UN")])
+
+    custos = obter_custos_unitarios_mensais(["Coxa Frango"], db_path=db_path)
+
+    assert custos[0]["custo_unitario_medio"] == pytest.approx(3.5)
+
+
+def test_compras_em_outra_unidade_ficam_fora_e_sao_contadas(tmp_path):
+    """Só a unidade base com mais gasto entra na série; as demais são contadas."""
+    db_path = _banco_um_produto(tmp_path, [
+        ("2025-01-10", "COXA FRANGO", "10.00", "3", "KG"),
+        ("2025-02-10", "COXA FRANGO", "11.00", "2", "KG"),
+        ("2025-02-20", "COXA FRANGO BANDEJA", "12.00", "1", "UN"),  # sem tamanho
+    ])
+
+    custos = obter_custos_unitarios_mensais(["Coxa Frango"], db_path=db_path)
+    quantidades = obter_quantidades_mensais_produtos(["Coxa Frango"], db_path=db_path)
+
+    assert [round(c["custo_unitario_medio"], 2) for c in custos] == [10.0, 11.0]
+    assert [q["quantidade_total"] for q in quantidades] == [3.0, 2.0]
+    assert obter_compras_fora_da_unidade(["Coxa Frango"], db_path=db_path) == {"Coxa Frango": 1}
 
 
 # ---------------------------------------------------------------------------
