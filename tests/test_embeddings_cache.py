@@ -145,6 +145,7 @@ def test_inicializar_modelo_embeddings_erro_permissao_no_download(tmp_path, monk
     assert isinstance(exc_info.value.__cause__, PermissionError)
 
 
+@pytest.mark.chroma_padrao
 def test_chroma_persistente_aponta_para_data_na_raiz():
     esperado = Path(__file__).resolve().parents[1] / "data" / "chroma"
     assert embeddings._CHROMA_PERSIST_DIR == esperado

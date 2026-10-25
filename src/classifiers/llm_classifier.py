@@ -348,6 +348,7 @@ class ClassificacaoResultado:
 	resposta_json: str | None = None
 	produto_nome: str | None = None
 	produto_marca: str | None = None
+	produto_id: int | None = None
 
 
 class LLMClassifier:

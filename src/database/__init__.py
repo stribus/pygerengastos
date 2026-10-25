@@ -1243,22 +1243,24 @@ def registrar_classificacao_itens(
 				# Caso contrário, apenas em categoria_sugerida
 				confirmar_item = bool(item.get("confirmar")) or confirmar
 
-				# Se tivermos info de produto, tentamos resolver/criar o produto
+				# Resolver o produto: o produto_id vindo do cache semântico tem
+				# prioridade; senão, busca/cria pelo nome (a marca fica no item)
 				produto_id = None
-				if prod_nome:
+				produto_obj = _buscar_produto_por_id(con, item.get("produto_id"))
+				if produto_obj is None and prod_nome:
 					produto_obj = _resolver_produto_por_nome_marca(con, prod_nome, prod_marca, cat)
-					if produto_obj:
-						produto_id = produto_obj.id
-						# Se o produto foi retornado mas sem categoria, e temos uma categoria válida, atualiza
-						if produto_obj.categoria_id is None and categoria_id is not None:
-							try:
-								con.execute(
-									"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
-									[categoria_id, produto_id]
-								)
-								logger.debug(f"Categoria {cat} associada ao produto {produto_id} durante classificação")
-							except Exception as e:
-								logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
+				if produto_obj:
+					produto_id = produto_obj.id
+					# Se o produto foi retornado mas sem categoria, e temos uma categoria válida, atualiza
+					if produto_obj.categoria_id is None and categoria_id is not None:
+						try:
+							con.execute(
+								"UPDATE produtos SET categoria_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+								[categoria_id, produto_id]
+							)
+							logger.debug(f"Categoria {cat} associada ao produto {produto_id} durante classificação")
+						except Exception as e:
+							logger.warning(f"Erro ao atualizar categoria do produto {produto_id}: {e}")
 
 				# Montar update dinâmico
 				sql_update = """
@@ -1286,13 +1288,18 @@ def registrar_classificacao_itens(
 						sql_update += ", categoria_confirmada_id = NULL"
 
 				if produto_id:
+					# Nome canônico do produto (evita "Batata branca" x "Batata Branca"
+					# separados nos relatórios); a marca é a do próprio item
 					sql_update += ", produto_id = ?, produto_nome = ?, produto_marca = ?"
-					params.extend([produto_id, prod_nome, prod_marca])
+					params.extend([produto_id, produto_obj.nome_base, prod_marca])
 
 				sql_update += " WHERE chave_acesso = ? AND sequencia = ?"
 				params.extend([chave, seq])
 
 				con.execute(sql_update, params)
+
+				if produto_id:
+					_apontar_alias_da_descricao(con, chave, seq, produto_id)
 
 			con.execute("COMMIT")
 
@@ -1520,13 +1527,62 @@ def listar_revisoes_manuais(
 	]
 
 
+def _buscar_produto_por_id(
+	con: sqlite3.Connection, produto_id: Any
+) -> ProdutoPadronizado | None:
+	"""Retorna o produto com o id informado, ou None se vazio/inexistente."""
+	try:
+		produto_id_int = int(produto_id)
+	except (TypeError, ValueError):
+		return None
+	row = con.execute(
+		"SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE id = ?",
+		[produto_id_int],
+	).fetchone()
+	if not row:
+		return None
+	return ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
+
+
+def _apontar_alias_da_descricao(
+	con: sqlite3.Connection, chave: str, sequencia: int, produto_id: int
+) -> None:
+	"""Faz a descrição original do item apontar para o produto escolhido.
+
+	Assim uma nova nota com a mesma descrição já é importada no produto certo
+	(a importação resolve o produto pelo alias antes de qualquer classificação).
+	"""
+	row = con.execute(
+		"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+		[chave, sequencia],
+	).fetchone()
+	descricao = (row[0] or "").strip() if row else ""
+	if not descricao:
+		return
+	cursor = con.execute(
+		"UPDATE aliases_produtos SET produto_id = ? WHERE lower(texto_original) = lower(?)",
+		[produto_id, descricao],
+	)
+	if cursor.rowcount == 0:
+		con.execute(
+			"INSERT OR IGNORE INTO aliases_produtos (produto_id, texto_original) VALUES (?, ?)",
+			[produto_id, descricao],
+		)
+
+
 def _resolver_produto_por_nome_marca(
 	con: sqlite3.Connection,
 	nome: str,
 	marca: str | None,
 	categoria_nome: str | None
 ) -> ProdutoPadronizado | None:
-	"""Busca ou cria um produto com base no nome e marca normalizados."""
+	"""Busca ou cria um produto pelo nome (sem diferenciar maiúsculas).
+
+	O produto é o conceito genérico ("Chopp"); a marca de cada compra fica no
+	item. Havendo mais de um produto com o mesmo nome (duplicatas antigas por
+	marca), prefere o de mesma marca, depois o com mais itens. A marca só é
+	gravada no produto quando ele é criado.
+	"""
 
 	nome = nome.strip()
 	if not nome:
@@ -1541,15 +1597,17 @@ def _resolver_produto_por_nome_marca(
 		if cat_row:
 			categoria_id = cat_row[0]
 
-	# Tenta achar exato
-	query_busca = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
-	params_busca = [nome]
-
-	if marca:
-		query_busca += " AND lower(marca_base) = lower(?)"
-		params_busca.append(marca)
-	else:
-		query_busca += " AND marca_base IS NULL"
+	query_busca = """
+		SELECT p.id, p.nome_base, p.marca_base, p.categoria_id
+		FROM produtos p
+		WHERE lower(p.nome_base) = lower(?)
+		ORDER BY
+			lower(COALESCE(p.marca_base, '')) = lower(COALESCE(?, '')) DESC,
+			(SELECT COUNT(*) FROM itens i WHERE i.produto_id = p.id) DESC,
+			p.id
+		LIMIT 1
+	"""
+	params_busca = [nome, marca]
 
 	row = con.execute(query_busca, params_busca).fetchone()
 	if row:
@@ -1763,37 +1821,11 @@ def _resolver_produto_por_descricao(
 	if not nome_base:
 		return None
 
-	# 3. Busca na tabela de produtos
-	query = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
-	params = [nome_base]
-	if marca_base:
-		query += " AND lower(marca_base) = lower(?)"
-		params.append(marca_base)
-	else:
-		query += " AND marca_base IS NULL"
-
-	row = con.execute(query, params).fetchone()
-
-	produto_id = None
-	if row:
-		produto = ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
-		produto_id = row[0]
-	else:
-		# 4. Cria novo produto (sem categoria por enquanto)
-		try:
-			con.execute(
-				"INSERT INTO produtos (nome_base, marca_base) VALUES (?, ?)",
-				[nome_base, marca_base]
-			)
-			# Recupara ID (assumindo sequencial e sem concorrência alta no desktop app)
-			row_id = con.execute("SELECT id FROM produtos WHERE nome_base = ? AND (marca_base = ? OR (marca_base IS NULL AND ? IS NULL))", [nome_base, marca_base, marca_base]).fetchone()
-			if row_id:
-				produto_id = row_id[0]
-				produto = ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=None)
-			else:
-				return None
-		except Exception:
-			return None
+	# 3. Busca pelo nome (mesma identidade da classificação) ou cria o produto
+	produto = _resolver_produto_por_nome_marca(con, nome_base, marca_base, None)
+	if produto is None:
+		return None
+	produto_id = produto.id
 
 	# 5. Cria alias para aprendizado futuro
 	try:
@@ -1825,17 +1857,17 @@ def _registrar_embeddings_para_produto(produto: ProdutoPadronizado) -> None:
 		pass
 
 
-def _atualizar_embeddings_pos_validacao(
-	itens_validados: Sequence[Mapping[str, Any]],
-	*,
-	db_path: Path | str | None = None
+def _indexar_embeddings_dos_itens(
+	con: sqlite3.Connection,
+	itens: Sequence[Mapping[str, Any]],
 ) -> None:
-	"""Atualiza embeddings no ChromaDB após validação manual do usuário.
+	"""Indexa no Chroma a descrição original de cada item com o produto já gravado.
 
-	Para cada item validado, indexa a descrição original com:
-	- nome_base (produto validado)
-	- marca_base (marca validada)
-	- categoria (categoria validada)
+	Lê do próprio item o produto_id, o nome canônico e a marca, para que o cache
+	semântico devolva o produto consolidado (e não o nome sugerido pelo LLM).
+	Só indexa quando a classificação trouxe um produto (nome ou produto_id): o
+	nome gerado automaticamente na importação não é confiável para o cache.
+	Itens sem produto ou sem categoria são ignorados.
 	"""
 	try:
 		from src.classifiers.embeddings import upsert_descricao_embedding
@@ -1843,86 +1875,25 @@ def _atualizar_embeddings_pos_validacao(
 		logger.warning("Módulo embeddings não disponível, pulando atualização de embeddings")
 		return
 
-	with conexao(db_path) as con:
-		for item in itens_validados:
-			chave = item.get("chave_acesso")
-			seq = item.get("sequencia")
-
-			if not chave or seq is None:
-				continue
-
-			# Busca descrição original do item
-			row = con.execute(
-				"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
-				[chave, seq]
-			).fetchone()
-
-			if not row or not row[0]:
-				continue
-
-			descricao_original = row[0]
-			produto_nome = item.get("produto_nome")
-			produto_marca = item.get("produto_marca")
-			categoria = item.get("categoria")
-
-			# Só atualiza se tiver pelo menos nome e categoria
-			if not produto_nome or not categoria:
-				continue
-
-			try:
-				upsert_descricao_embedding(
-					descricao_original=descricao_original,
-					nome_base=produto_nome,
-					marca_base=produto_marca,
-					categoria=categoria,
-					produto_id=None  # Não precisamos do produto_id aqui
-				)
-				logger.debug(
-					f"Embedding atualizado para '{descricao_original}': "
-					f"{produto_nome} ({produto_marca}) - {categoria}"
-				)
-			except Exception as e:
-				logger.warning(f"Erro ao atualizar embedding para '{descricao_original}': {e}")
-				continue
-
-
-def _atualizar_embeddings_pos_classificacao(
-	dados_classificacao: Sequence[Mapping[str, Any]],
-	con: sqlite3.Connection
-) -> None:
-	"""Atualiza embeddings após classificação automática (LLM ou cache).
-
-	Registra descrições originais com suas classificações para reutilização futura.
-	"""
-	try:
-		from src.classifiers.embeddings import upsert_descricao_embedding
-	except ImportError:
-		return
-
-	for item in dados_classificacao:
+	for item in itens:
 		chave = item.get("chave_acesso")
 		seq = item.get("sequencia")
-
-		if not chave or seq is None:
-			continue
-
-		# Busca descrição original
-		row = con.execute(
-			"SELECT descricao FROM itens WHERE chave_acesso = ? AND sequencia = ?",
-			[chave, seq]
-		).fetchone()
-
-		if not row or not row[0]:
-			continue
-
-		descricao_original = row[0]
-		produto_nome = item.get("produto_nome")
 		categoria = item.get("categoria")
-		produto_marca = item.get("produto_marca")
-
-		# Só registra se tiver nome e categoria (classificação completa)
-		if not produto_nome or not categoria:
+		if not chave or seq is None or not categoria:
 			continue
+		if not item.get("produto_nome") and not item.get("produto_id"):
+			continue
+
+		row = con.execute(
+			"""
+			SELECT descricao, produto_id, produto_nome, produto_marca
+			FROM itens WHERE chave_acesso = ? AND sequencia = ?
+			""",
+			[chave, seq],
+		).fetchone()
+		if not row or not row[0] or not row[2]:
+			continue
+		descricao_original, produto_id, produto_nome, produto_marca = row
 
 		try:
 			upsert_descricao_embedding(
@@ -1930,15 +1901,28 @@ def _atualizar_embeddings_pos_classificacao(
 				nome_base=produto_nome,
 				marca_base=produto_marca,
 				categoria=categoria,
-				produto_id=None
-			)
-			logger.debug(
-				f"Embedding registrado após classificação: '{descricao_original}' -> "
-				f"{produto_nome} ({produto_marca}) - {categoria}"
+				produto_id=produto_id,
 			)
 		except Exception as e:
-			logger.warning(f"Erro ao registrar embedding para '{descricao_original}': {e}")
-			continue
+			logger.warning(f"Erro ao atualizar embedding para '{descricao_original}': {e}")
+
+
+def _atualizar_embeddings_pos_validacao(
+	itens_validados: Sequence[Mapping[str, Any]],
+	*,
+	db_path: Path | str | None = None
+) -> None:
+	"""Atualiza embeddings no ChromaDB após validação manual do usuário."""
+	with conexao(db_path) as con:
+		_indexar_embeddings_dos_itens(con, itens_validados)
+
+
+def _atualizar_embeddings_pos_classificacao(
+	dados_classificacao: Sequence[Mapping[str, Any]],
+	con: sqlite3.Connection
+) -> None:
+	"""Atualiza embeddings após classificação automática (LLM ou cache)."""
+	_indexar_embeddings_dos_itens(con, dados_classificacao)
 
 
 def _converter_data_iso_e_data(texto: str | None) -> tuple[str | None, str | None]:
@@ -2813,18 +2797,24 @@ def consolidar_produtos(
 				)
 				nome_final_usado = nome_final_strip
 
-			# Migrar itens
+			# Migrar itens da origem e alinhar o nome dos itens de origem E destino
+			# ao nome efetivo do produto (com o eventual sufixo de conflito). A marca
+			# de cada item é preservada: o produto consolidado pode reunir marcas.
 			itens_migrados = con.execute(
+				"SELECT COUNT(*) FROM itens WHERE produto_id = ?",
+				[produto_id_origem],
+			).fetchone()[0]
+			con.execute(
 				"""
 				UPDATE itens
 				SET
 					produto_id = ?,
-					produto_nome = COALESCE(?, produto_nome),
+					produto_nome = ?,
 					atualizado_em = CURRENT_TIMESTAMP
-				WHERE produto_id = ?
+				WHERE produto_id IN (?, ?)
 				""",
-				[produto_id_destino, nome_final or destino_row[0] or None, produto_id_origem]
-			).rowcount
+				[produto_id_destino, nome_final_usado or nome_destino, produto_id_origem, produto_id_destino]
+			)
 
 			# Migrar aliases reapontando-os para o destino.
 			# aliases_produtos tem UNIQUE (texto_original) global, então cada texto
@@ -2850,7 +2840,7 @@ def consolidar_produtos(
 					produto_id_origem,
 					produto_id_destino,
 					nome_origem,
-					nome_final or nome_destino,
+					nome_final_usado or nome_destino,
 					usuario or "sistema",
 					observacoes or None,
 					itens_migrados,
@@ -2886,7 +2876,9 @@ def consolidar_produtos(
 	embeddings_atualizados = 0
 	try:
 		from src.classifiers.embeddings import atualizar_produto_id_embeddings
-		embeddings_atualizados = atualizar_produto_id_embeddings(produto_id_origem, produto_id_destino)
+		embeddings_atualizados = atualizar_produto_id_embeddings(
+			produto_id_origem, produto_id_destino, nome_base=nome_final_usado or nome_destino
+		)
 
 		# Atualizar auditoria com count de embeddings
 		if auditoria_id is not None:

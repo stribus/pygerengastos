@@ -448,15 +448,20 @@ def buscar_produtos_semelhantes(descricao: str, top_k: int = 3) -> List[Dict[str
         })
     return similaridades
 
-def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int) -> int:
-    """Atualiza produto_id em embeddings após consolidação de produtos.
+def atualizar_produto_id_embeddings(
+    produto_id_antigo: int, produto_id_novo: int, nome_base: str | None = None
+) -> int:
+    """Atualiza produto_id (e o nome) dos embeddings após consolidação de produtos.
 
-    Busca todos os embeddings com produto_id antigo e atualiza para o novo.
-    Mantém todos os outros metadados intactos.
+    Os embeddings do produto antigo passam a apontar para o novo. Se ``nome_base``
+    for informado, os embeddings da origem e do destino recebem esse nome, para
+    que o cache semântico devolva o produto consolidado. A marca é preservada:
+    ela pertence a cada descrição.
 
     Args:
         produto_id_antigo: ID do produto sendo consolidado
         produto_id_novo: ID do produto destino (mantido)
+        nome_base: nome efetivo do produto destino após a consolidação
 
     Returns:
         Número de embeddings atualizados
@@ -465,8 +470,12 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
         collection = _get_collection()
 
         # Buscar embeddings com produto_id antigo (incluindo embeddings para evitar recálculo)
+        # Com renomeação, os embeddings do destino também recebem o nome novo
+        filtro: dict[str, Any] = {"produto_id": str(produto_id_antigo)}
+        if nome_base:
+            filtro = {"produto_id": {"$in": [str(produto_id_antigo), str(produto_id_novo)]}}
         resultados = collection.get(
-            where={"produto_id": str(produto_id_antigo)},
+            where=filtro,
             include=["embeddings", "metadatas", "documents"]
         )
 
@@ -506,6 +515,8 @@ def atualizar_produto_id_embeddings(produto_id_antigo: int, produto_id_novo: int
             if metadatas[i] is None:
                 metadatas[i] = {}
             metadatas[i]["produto_id"] = str(produto_id_novo)
+            if nome_base:
+                metadatas[i]["nome_base"] = nome_base
 
         # Re-inserir com novo produto_id (upsert sobrescreve)
         # Construir argumentos do upsert condicionalmente
