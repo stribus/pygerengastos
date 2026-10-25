@@ -21,7 +21,7 @@ from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 from src.logger import setup_logging
-from src.medidas import extrair_tamanho, medida_base
+from src.medidas import extrair_tamanho, medida_base, normalizar_unidade
 
 logger = setup_logging("database")
 
@@ -252,6 +252,7 @@ class ItemParaClassificacao:
 	categoria_confirmada: Optional[str]
 	emitente_nome: Optional[str]
 	emissao_iso: Optional[str]
+	tamanho: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -294,6 +295,7 @@ class ItemNotaRevisao:
 	produto_nome: str | None
 	produto_marca: str | None
 	tamanho: str | None = None
+	tamanho_fonte: str | None = None
 
 
 @dataclass(slots=True)
@@ -644,6 +646,7 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
 		"ALTER TABLE notas ADD COLUMN desconto DECIMAL(18, 2)",
 		"ALTER TABLE itens ADD COLUMN tamanho TEXT",
+		"ALTER TABLE itens ADD COLUMN tamanho_fonte TEXT",
 	]
 
 	for migration in migrations:
@@ -971,7 +974,8 @@ def listar_itens_para_revisao(
 			categoria_confirmada,
 			produto_nome,
 			produto_marca,
-			tamanho
+			tamanho,
+			tamanho_fonte
 		FROM itens
 		WHERE {' AND '.join(condicoes)}
 		ORDER BY sequencia
@@ -992,6 +996,7 @@ def listar_itens_para_revisao(
 			produto_nome=row[7],
 			produto_marca=row[8],
 			tamanho=row[9],
+			tamanho_fonte=row[10],
 		)
 		for row in rows
 	]
@@ -1105,7 +1110,8 @@ def listar_itens_para_classificacao(
 				i.categoria_sugerida,
 				i.categoria_confirmada,
 				n.emitente_nome,
-				n.emissao_iso
+				n.emissao_iso,
+				i.tamanho
 			FROM itens i
 			JOIN notas n ON n.chave_acesso = i.chave_acesso
 			WHERE {where_sql}
@@ -1129,6 +1135,7 @@ def listar_itens_para_classificacao(
 			categoria_confirmada=row[9],
 			emitente_nome=row[10],
 			emissao_iso=row[11],
+			tamanho=row[12],
 		)
 		for row in rows
 	]
@@ -1306,6 +1313,9 @@ def registrar_classificacao_itens(
 				if produto_id:
 					_apontar_alias_da_descricao(con, chave, seq, produto_id)
 
+				if item.get("tamanho"):
+					_aplicar_tamanho(con, chave, seq, item["tamanho"], "ia")
+
 			con.execute("COMMIT")
 
 			# Atualizar embeddings após classificação (LLM ou cache semântico)
@@ -1392,6 +1402,74 @@ def limpar_classificacoes_completas(
 		return cursor.rowcount
 
 
+def _aplicar_tamanho(
+	con: sqlite3.Connection,
+	chave: str,
+	sequencia: int,
+	tamanho: str | None,
+	fonte: str,
+) -> None:
+	"""Grava o tamanho da embalagem de um item e o propaga para a mesma descrição.
+
+	Fontes: "usuario" (revisão manual) vale sobre tudo e substitui palpites da
+	IA; "ia" só preenche item sem tamanho, vendido por unidade e cuja descrição
+	não traz o tamanho. A propagação alcança os itens com a mesma descrição
+	que ainda não têm tamanho (ou têm o da IA, se a fonte for o usuário).
+	Tamanho vazio do usuário limpa só o próprio item.
+	"""
+	row = con.execute(
+		"SELECT descricao, unidade, tamanho FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+		[chave, sequencia],
+	).fetchone()
+	if row is None:
+		return
+	descricao, unidade, tamanho_atual = row
+	tamanho = " ".join((tamanho or "").upper().split()) or None
+	if tamanho and extrair_tamanho(tamanho) is None:
+		return
+
+	if fonte == "ia":
+		if (
+			not tamanho
+			or tamanho_atual
+			or normalizar_unidade(unidade) in ("KG", "L")
+			or extrair_tamanho(descricao) is not None
+		):
+			return
+		substituiveis = "tamanho IS NULL"
+	else:
+		substituiveis = "(tamanho IS NULL OR tamanho_fonte = 'ia')"
+
+	con.execute(
+		"UPDATE itens SET tamanho = ?, tamanho_fonte = ? WHERE chave_acesso = ? AND sequencia = ?",
+		[tamanho, fonte if tamanho else None, chave, sequencia],
+	)
+	if tamanho:
+		con.execute(
+			f"""
+			UPDATE itens SET tamanho = ?, tamanho_fonte = ?
+			WHERE upper(trim(descricao)) = upper(trim(?)) AND {substituiveis}
+			""",
+			[tamanho, fonte, descricao],
+		)
+
+
+def _tamanho_herdado(con: sqlite3.Connection, item: NotaItem) -> tuple[str | None, str | None]:
+	"""Tamanho já informado para a mesma descrição, para um item novo que precisa dele."""
+	if normalizar_unidade(item.unidade) in ("KG", "L") or extrair_tamanho(item.descricao) is not None:
+		return None, None
+	row = con.execute(
+		"""
+		SELECT tamanho, tamanho_fonte FROM itens
+		WHERE upper(trim(descricao)) = upper(trim(?)) AND tamanho IS NOT NULL
+		ORDER BY tamanho_fonte = 'usuario' DESC, atualizado_em DESC
+		LIMIT 1
+		""",
+		[item.descricao or ""],
+	).fetchone()
+	return (row[0], row[1]) if row else (None, None)
+
+
 def registrar_revisoes_manuais(
 	registros: Sequence[Mapping[str, Any]],
 	*,
@@ -1472,7 +1550,8 @@ def registrar_revisoes_manuais(
 
 	if tamanhos:
 		with conexao(db_path) as con:
-			con.executemany("UPDATE itens SET tamanho = ? WHERE chave_acesso = ? AND sequencia = ?", tamanhos)
+			for tamanho, chave, sequencia in tamanhos:
+				_aplicar_tamanho(con, chave, sequencia, tamanho, "usuario")
 
 	if not itens_para_classificar:
 		return
@@ -1765,6 +1844,7 @@ def _persistir_itens(
 		produto_id = produto.id if produto else None
 		produto_nome = produto.nome_base if produto else None
 		produto_marca = produto.marca_base if produto else None
+		tamanho, tamanho_fonte = _tamanho_herdado(con, item)
 		con.execute(
 			"""
 			INSERT INTO itens (
@@ -1785,8 +1865,10 @@ def _persistir_itens(
 				categoria_confirmada_id,
 				fonte_classificacao,
 				confianca_classificacao,
+				tamanho,
+				tamanho_fonte,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP)
 			""",
 			[
 				chave,
@@ -1800,6 +1882,8 @@ def _persistir_itens(
 				produto_id,
 				produto_nome,
 				produto_marca,
+				tamanho,
+				tamanho_fonte,
 			],
 		)
 

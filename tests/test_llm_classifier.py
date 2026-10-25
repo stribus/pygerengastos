@@ -719,3 +719,67 @@ def test_item_com_categoria_vazia_vai_para_o_proximo_modelo(monkeypatch):
 	)
 
 	assert {(r.sequencia, r.categoria) for r in resultados} == {(1, "Alimentos"), (2, "Limpeza")}
+
+
+# ---------------------------------------------------------------------------
+# Tamanho da embalagem pela IA (quando a descrição não traz)
+# ---------------------------------------------------------------------------
+
+def test_payload_pede_o_tamanho_da_embalagem():
+	payload = LLMClassifier(api_key="fake")._montar_payload([_item_para_classificacao()])
+	prompt = payload["messages"][1]["content"]
+
+	assert '"tamanho"' in prompt
+
+
+def test_interpretar_resposta_le_tamanho_valido_e_ignora_invalido():
+	conteudo = json.dumps({"itens": [
+		{"sequencia": 1, "categoria": "Bebidas", "produto": {"nome_base": "Chopp"}, "tamanho": "1l"},
+		{"sequencia": 2, "categoria": "Bebidas", "tamanho": "grande"},
+		{"sequencia": 3, "categoria": "Bebidas", "tamanho": None},
+	]})
+
+	mapa = LLMClassifier(api_key="fake")._interpretar_resposta(conteudo)
+
+	assert mapa[1].tamanho == "1L"
+	assert mapa[2].tamanho is None
+	assert mapa[3].tamanho is None
+
+
+def test_sugerir_tamanhos_mistura_notas_e_usa_o_proximo_modelo_se_falhar(monkeypatch):
+	"""Os itens são numerados pela posição (não pela sequência), então notas diferentes cabem no mesmo lote."""
+	enviados: list[tuple[str, str]] = []
+
+	def _fake_config(self, modelo):  # type: ignore[override]
+		return ModeloConfig(nome=modelo, api_key_env="X", max_tokens=100, max_itens=10, timeout=1.0)
+
+	def _fake_executar(self, payload, *, config, api_key):  # type: ignore[override]
+		prompt = payload["messages"][1]["content"]
+		enviados.append((config.nome, prompt))
+		if config.nome == "modelo-a":
+			raise RuntimeError("timeout simulado")
+		conteudo = json.dumps({"itens": [
+			{"indice": 1, "tamanho": "1l"},
+			{"indice": 2, "tamanho": None},
+			{"indice": 3, "tamanho": "pacote"},
+		]})
+		return conteudo, {}
+
+	monkeypatch.setattr(LLMClassifier, "_obter_config_modelo", _fake_config)
+	monkeypatch.setattr(LLMClassifier, "_obter_api_key", lambda self, config: "chave-fake")
+	monkeypatch.setattr(LLMClassifier, "_executar_chamada", _fake_executar)
+
+	tamanhos = LLMClassifier(api_key="fake").sugerir_tamanhos(
+		[_item(1, "NOTA_X"), _item(1, "NOTA_Y"), _item(2, "NOTA_X")],
+		model_priority=["modelo-a", "modelo-b"],
+	)
+
+	assert tamanhos == {("NOTA_X", 1): "1L"}
+	assert [modelo for modelo, _ in enviados] == ["modelo-a", "modelo-b"]
+	assert "Item 1 de NOTA_Y" in enviados[1][1]
+
+
+def test_sugerir_tamanhos_sem_modelo_disponivel_retorna_vazio(monkeypatch):
+	monkeypatch.setattr(LLMClassifier, "_obter_api_key", lambda self, config: None)
+
+	assert LLMClassifier(api_key="fake").sugerir_tamanhos([_item(1)], model_priority=["modelo-a"]) == {}
