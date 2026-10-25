@@ -1821,37 +1821,11 @@ def _resolver_produto_por_descricao(
 	if not nome_base:
 		return None
 
-	# 3. Busca na tabela de produtos
-	query = "SELECT id, nome_base, marca_base, categoria_id FROM produtos WHERE lower(nome_base) = lower(?)"
-	params = [nome_base]
-	if marca_base:
-		query += " AND lower(marca_base) = lower(?)"
-		params.append(marca_base)
-	else:
-		query += " AND marca_base IS NULL"
-
-	row = con.execute(query, params).fetchone()
-
-	produto_id = None
-	if row:
-		produto = ProdutoPadronizado(id=row[0], nome_base=row[1], marca_base=row[2], categoria_id=row[3])
-		produto_id = row[0]
-	else:
-		# 4. Cria novo produto (sem categoria por enquanto)
-		try:
-			con.execute(
-				"INSERT INTO produtos (nome_base, marca_base) VALUES (?, ?)",
-				[nome_base, marca_base]
-			)
-			# Recupara ID (assumindo sequencial e sem concorrência alta no desktop app)
-			row_id = con.execute("SELECT id FROM produtos WHERE nome_base = ? AND (marca_base = ? OR (marca_base IS NULL AND ? IS NULL))", [nome_base, marca_base, marca_base]).fetchone()
-			if row_id:
-				produto_id = row_id[0]
-				produto = ProdutoPadronizado(id=produto_id, nome_base=nome_base, marca_base=marca_base, categoria_id=None)
-			else:
-				return None
-		except Exception:
-			return None
+	# 3. Busca pelo nome (mesma identidade da classificação) ou cria o produto
+	produto = _resolver_produto_por_nome_marca(con, nome_base, marca_base, None)
+	if produto is None:
+		return None
+	produto_id = produto.id
 
 	# 5. Cria alias para aprendizado futuro
 	try:

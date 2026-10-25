@@ -18,6 +18,10 @@ Os dados gravados antes dessas regras ficaram inconsistentes. Este script:
 Por padrão apenas simula e mostra o que mudaria; use --aplicar para gravar.
 Faça backup de data/gastos.db e de data/chroma antes de aplicar.
 
+As etapas não formam uma transação única (cada fusão confirma a sua, e o
+Chroma não é transacional). Se a execução for interrompida, rode o script de
+novo: ele recalcula o que falta e é idempotente.
+
 Uso:
     python scripts/realinhar_produtos.py [--aplicar] [--db CAMINHO] [--chroma PASTA]
 """

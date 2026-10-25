@@ -196,3 +196,19 @@ def test_historico_registra_o_nome_efetivamente_gravado(tmp_path):
 	with conexao(db_path) as con:
 		nome = con.execute("SELECT nome_destino FROM consolidacoes_historico").fetchone()[0]
 	assert nome == "Coxa de Frango (1)"
+
+
+# ---------------------------------------------------------------------------
+# Importação: descrição nova de outra marca entra no produto genérico existente
+# ---------------------------------------------------------------------------
+
+def test_importacao_de_descricao_nova_reusa_produto_de_mesmo_nome(tmp_path):
+	"""Regressão: "CERVEJA SKOL 350ML" (marca conhecida) criava o produto "Cerveja / Skol"."""
+	db_path = tmp_path / "t.db"
+	with conexao(db_path) as con:
+		cerveja = _criar_produto(con, "Cerveja", "Budweiser")
+
+	chave = _salvar(db_path, "9", ["CERVEJA SKOL 350ML"])
+
+	assert _item(db_path, chave, 1)[0] == cerveja.id
+	assert _produtos_com_nome(db_path, "Cerveja") == 1
