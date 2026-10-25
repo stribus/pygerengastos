@@ -6,9 +6,10 @@ relatórios. As notas novas já recebem o tamanho na classificação; este scrip
 cobre as antigas.
 
 A IA recebe uma pergunta por descrição distinta e só responde quando tem
-segurança. A resposta é gravada com origem "ia" e vale para todos os itens com
-a mesma descrição. O que ela não souber fica para a revisão manual (tela de
-análise). Itens vendidos por KG/L e descrições com tamanho são ignorados.
+segurança. A resposta é gravada com origem "ia" para todos os itens com a
+mesma descrição, como sugestão: ela só entra nos relatórios depois que você
+confirmar os ajustes da nota na tela de análise (a IA às vezes chuta). O que
+ela não souber fica para você preencher. Itens vendidos por KG/L e descrições com tamanho são ignorados.
 
 Por padrão apenas lista as descrições sem tamanho, sem chamar a IA; use
 --aplicar para consultar a IA e gravar. Faça backup de data/gastos.db antes.
@@ -105,7 +106,7 @@ def main() -> None:
 		print("\nSimulação: a IA não foi consultada e nada foi gravado. Use --aplicar (faça backup antes).")
 		return
 
-	print(f"\nPreenchidas pela IA: {len(relatorio['preenchidas'])}")
+	print(f"\nSugeridas pela IA (confirme na tela de análise): {len(relatorio['preenchidas'])}")
 	for descricao, tamanho in relatorio["preenchidas"].items():
 		print(f"  {descricao}: {tamanho}")
 	print(f"\nSem resposta (preencha na tela de análise): {len(relatorio['sem_resposta'])}")

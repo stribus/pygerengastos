@@ -206,7 +206,7 @@ def test_editor_mostra_o_tamanho_da_nota_e_a_origem(db_path):
 	df = _montar_editor(listar_itens_para_revisao(OUTRA_CHAVE, db_path=db_path))
 
 	assert df["tamanho"].tolist() == ["2L", "1L", ""]
-	assert df["origem_tamanho"].tolist() == ["nota", "IA", ""]
+	assert df["origem_tamanho"].tolist() == ["nota", "IA (a confirmar)", ""]
 
 
 def test_editor_so_envia_o_tamanho_alterado(db_path):
@@ -221,3 +221,27 @@ def test_editor_so_envia_o_tamanho_alterado(db_path):
 	assert registros[0]["tamanho"] == ""  # não grava o que a descrição já informa
 	assert registros[1]["tamanho"] == "1l"
 	assert "tamanho" not in registros[2]  # não mexeu
+
+
+# ---------------------------------------------------------------------------
+# Palpite da IA é sugestão: só entra no relatório depois de confirmado
+# ---------------------------------------------------------------------------
+
+def test_palpite_da_ia_nao_entra_no_relatorio_ate_ser_confirmado(db_path):
+	_classificar_com_tamanho(db_path, CHAVE, 2, "2l")
+
+	assert obter_compras_fora_da_unidade(["Chopp"], db_path=db_path) == {"Chopp": 1}
+
+	df_base = _montar_editor(listar_itens_para_revisao(CHAVE, db_path=db_path))
+	assert df_base["origem_tamanho"].tolist()[1] == "IA (a confirmar)"
+
+	# Salvar rascunho sem mexer no tamanho não confirma o palpite
+	registros = _converter_registros(df_base, CHAVE, None, df_base)
+	assert "tamanho" not in registros[1]
+
+	# Confirmar os ajustes da nota confirma o tamanho exibido
+	registros = _converter_registros(df_base, CHAVE, None, df_base, confirmar=True)
+	registrar_revisoes_manuais(registros, confirmar=False, db_path=db_path)
+
+	assert _tamanhos(db_path, CHAVE)[1] == ("2L", "usuario")
+	assert obter_compras_fora_da_unidade(["Chopp"], db_path=db_path) == {}

@@ -39,6 +39,11 @@ def test_normalizar_unidade(unidade, esperado):
 		("AGUA DA PEDRA 1 5L S", (1.5, "L")),
 		# "L+P-" é promoção (leve mais, pague menos), não litro
 		("CR D ORAL-B 3D WHIT 70G C/3 L+P-", (0.21, "KG")),
+		# "K" no fim de descrição cortada é quilo ("1KG" truncado)
+		("CARVAO PAVE CARBO 3K", (3.0, "KG")),
+		("NHOQUE TALHATELLI 1K", (1.0, "KG")),
+		# tamanho colado na contagem: 2 tubos de 90 g
+		("CR+GEL D SENSODYNE 90GC/2PROM", (0.18, "KG")),
 	],
 )
 def test_extrair_tamanho(descricao, esperado):
@@ -56,6 +61,7 @@ def test_extrair_tamanho(descricao, esperado):
 		"OVO BRANCO EXTRA C/30",  # contagem sem tamanho
 		"PROT INTIMUS A.BAC C/80L+P-",  # 80 unidades, não 80 litros
 		"CERVEJA LATAO",
+		"PAPEL 4K PLUS",  # "K" no meio da descrição não é quilo
 		"",
 		None,
 	],

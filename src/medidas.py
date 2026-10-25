@@ -20,15 +20,18 @@ _UNIDADES_VENDA = {
 
 # Número + unidade de peso/volume, com multiplicador opcional ("6X350ML").
 # MG fica de fora (dose de medicamento, não embalagem); número depois de "/"
-# é contagem ("C/80"), e "1 5L" é 1,5 L com a vírgula perdida na nota.
+# é contagem ("C/80"), e "1 5L" é 1,5 L com a vírgula perdida na nota. "K" só
+# vale no fim da descrição, onde o mercado cortou o "KG" ("CARVAO 3K"); o
+# tamanho pode vir colado na contagem ("90GC/2").
 _TAMANHO = re.compile(
-	r"(?<![\d.,/])(?:(\d+)\s*X\s*)?(\d+(?:[.,]\d+| \d(?=L))?)\s*(KG|GR|G|ML|LTS|LT|L)(?![A-Z])",
+	r"(?<![\d.,/])(?:(\d+)\s*X\s*)?(\d+(?:[.,]\d+| \d(?=L))?)\s*"
+	r"(KG|GR|G|ML|LTS|LT|L|K(?=\s*$))(?:(?![A-Z])|(?=C/))",
 	re.IGNORECASE,
 )
 # "C/3": embalagem com 3 unidades do tamanho indicado
-_CONTEM = re.compile(r"\bC/\s*(\d+)\b", re.IGNORECASE)
+_CONTEM = re.compile(r"(?:\b|(?<=\d[GL]))C/\s*(\d+)(?!\d)", re.IGNORECASE)
 _PARA_BASE = {
-	"KG": (1.0, "KG"), "GR": (0.001, "KG"), "G": (0.001, "KG"),
+	"KG": (1.0, "KG"), "K": (1.0, "KG"), "GR": (0.001, "KG"), "G": (0.001, "KG"),
 	"ML": (0.001, "L"), "LTS": (1.0, "L"), "LT": (1.0, "L"), "L": (1.0, "L"),
 }
 

@@ -2462,6 +2462,7 @@ def _compras_por_medida(
 			i.unidade,
 			i.descricao,
 			i.tamanho,
+			i.tamanho_fonte,
 			i.valor_total
 		FROM itens i
 		JOIN produtos p ON p.id = i.produto_id
@@ -2475,8 +2476,10 @@ def _compras_por_medida(
 
 	compras = []
 	gasto_por_unidade: dict[tuple[str, str], float] = {}
-	for produto, ano_mes, quantidade, unidade, descricao, tamanho, valor_total in rows:
-		qtd_base, unidade_base = medida_base(float(quantidade), unidade, descricao, tamanho)
+	for produto, ano_mes, quantidade, unidade, descricao, tamanho, fonte, valor_total in rows:
+		# Palpite da IA é só sugestão até o usuário confirmar na tela de análise
+		tamanho_valido = tamanho if fonte != "ia" else None
+		qtd_base, unidade_base = medida_base(float(quantidade), unidade, descricao, tamanho_valido)
 		valor = float(valor_total)
 		compras.append({
 			"produto_nome": produto,
