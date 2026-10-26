@@ -32,7 +32,9 @@ from src.ui.relatorios import (
     _identificar_produtos_regulares,
     _montar_series_inflacao,
     _montar_tabela_composicao_cesta,
+    _periodo_padrao,
     _preencher_meses_faltantes,
+    _quantidades_fixas_cesta,
 )
 
 
@@ -827,10 +829,10 @@ def test_cesta_com_backfill_sem_salto_de_composicao():
     df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-04-30")
 
     df_backfilled = _aplicar_backfill(df_completo, ["A", "B"], meses)
-    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, ["A", "B"])
+    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, ["A", "B"], {"A": 1.0, "B": 1.0})
 
     custos_cesta = df_cesta.sort_values("ano_mes")["custo_cesta"].tolist()
-    assert custos_cesta == [30.0, 30.0, 30.0, 30.0]  # sem degrau quando B "entra"
+    assert custos_cesta == [60.0, 60.0, 60.0, 60.0]  # sem degrau quando B "entra"
 
     inflacao_cesta = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
     assert all(v is not None and abs(v) < 0.01 for v in inflacao_cesta)
@@ -866,7 +868,7 @@ def test_backfill_e_cesta_sem_produtos_regulares():
     assert df_backfilled.empty
     assert list(df_backfilled.columns) == ["ano_mes", "produto_nome", "custo_unitario_medio"]
 
-    df_cesta = _calcular_cesta_basica_personalizada(df_completo, [])
+    df_cesta = _calcular_cesta_basica_personalizada(df_completo, [], {})
     assert df_cesta.empty
     assert list(df_cesta.columns) == ["ano_mes", "custo_cesta"]
 
@@ -911,11 +913,11 @@ def test_composicao_cesta_inclui_produtos_do_fallback():
     df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-01-31")
 
     tabela = _montar_tabela_composicao_cesta(
-        quantidades, df_completo, ["A", "B"], {"A": "UN", "B": "UN"}
+        quantidades, custos, df_completo, ["A", "B"], {"A": "UN", "B": "UN"}
     )
 
     assert sorted(tabela["Produto"]) == ["A", "B"]
-    assert abs(tabela["Custo Mensal Médio"].sum() - (2 * 10.0 + 3 * 4.0)) < 0.01
+    assert abs(tabela["Custo no Último Mês"].sum() - (2 * 10.0 + 3 * 4.0)) < 0.01
 
 
 def test_composicao_cesta_sem_quantidades_retorna_vazio():
@@ -923,6 +925,135 @@ def test_composicao_cesta_sem_quantidades_retorna_vazio():
     custos = [{"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0}]
     df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-01-31")
 
-    tabela = _montar_tabela_composicao_cesta([], df_completo, ["A"], {"A": "UN"})
+    tabela = _montar_tabela_composicao_cesta([], custos, df_completo, ["A"], {"A": "UN"})
 
     assert tabela.empty
+
+
+# ---------------------------------------------------------------------------
+# Cesta Laspeyres: quantidades fixas × preço de cada mês
+# ---------------------------------------------------------------------------
+
+def test_quantidade_fixa_e_media_dos_meses_com_compra():
+    """Mês sem compra não entra na média (não é quantidade zero)."""
+    quantidades = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "quantidade_total": 2.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "quantidade_total": 4.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "quantidade_total": 0.5},
+        {"produto_nome": "C", "ano_mes": "2025-02", "quantidade_total": 9.0},
+    ]
+
+    assert _quantidades_fixas_cesta(quantidades, ["A", "B"]) == {"A": 3.0, "B": 0.5}
+
+
+def test_cesta_pondera_preco_pela_quantidade_comprada():
+    """Custo = Σ quantidade fixa × preço do mês; o item caro e pouco comprado pesa pouco.
+
+    Regressão: a cesta era a média simples dos preços (A a R$ 10 e B a R$ 100
+    pesavam igual), e a inflação de B (+10%) dominava a da cesta.
+    """
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-02", "custo_unitario_medio": 10.0},
+        {"produto_nome": "B", "ano_mes": "2025-01", "custo_unitario_medio": 100.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "custo_unitario_medio": 110.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-02-28")
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-02-28")
+    df_backfilled = _aplicar_backfill(df_completo, ["A", "B"], meses)
+
+    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, ["A", "B"], {"A": 2.0, "B": 0.5})
+
+    assert df_cesta.sort_values("ano_mes")["custo_cesta"].tolist() == [70.0, 75.0]
+    inflacao = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
+    assert inflacao[-1] == pytest.approx(5 / 70 * 100)
+
+
+def test_cesta_sem_preco_no_mes_nao_soma_parcial():
+    """Sem o preço de um produto no mês, o custo fica vazio em vez de cair de degrau."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-02", "custo_unitario_medio": 10.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "custo_unitario_medio": 50.0},
+    ]
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-02-28")
+
+    df_cesta = _calcular_cesta_basica_personalizada(df_completo, ["A", "B"], {"A": 1.0, "B": 1.0})
+
+    serie = df_cesta.set_index("ano_mes")["custo_cesta"]
+    assert pd.isna(serie["2025-01"])
+    assert serie["2025-02"] == 60.0
+
+
+def test_composicao_preco_medio_so_com_meses_de_compra():
+    """Meses repetidos pelo último preço (ffill) não entram no preço médio.
+
+    Regressão: com compras em jan (R$ 10) e abr (R$ 20), fev e mar repetiam
+    R$ 10 e o preço médio saía R$ 12,50 em vez de R$ 15,00.
+    """
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-04", "custo_unitario_medio": 20.0},
+    ]
+    quantidades = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "quantidade_total": 1.0},
+        {"produto_nome": "A", "ano_mes": "2025-04", "quantidade_total": 3.0},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-04-30")
+    df_completo = _preencher_meses_faltantes(custos, ["A"], "2025-01-01", "2025-04-30")
+    df_backfilled = _aplicar_backfill(df_completo, ["A"], meses)
+
+    tabela = _montar_tabela_composicao_cesta(quantidades, custos, df_backfilled, ["A"], {"A": "KG"})
+
+    linha = tabela.iloc[0]
+    assert linha["Quantidade Mensal"] == pytest.approx(2.0)
+    assert linha["Preço Médio"] == pytest.approx(15.0)
+    assert linha["Preço no Último Mês"] == pytest.approx(20.0)
+
+
+def test_total_da_composicao_e_o_custo_da_cesta_no_ultimo_mes():
+    """O total da tabela é o mesmo custo da cesta do gráfico e do CSV no último mês."""
+    custos = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "custo_unitario_medio": 10.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "custo_unitario_medio": 12.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "custo_unitario_medio": 4.0},
+    ]
+    quantidades = [
+        {"produto_nome": "A", "ano_mes": "2025-01", "quantidade_total": 2.0},
+        {"produto_nome": "A", "ano_mes": "2025-03", "quantidade_total": 4.0},
+        {"produto_nome": "B", "ano_mes": "2025-02", "quantidade_total": 0.5},
+    ]
+    meses = _gerar_meses_periodo("2025-01-01", "2025-03-31")
+    df_completo = _preencher_meses_faltantes(custos, ["A", "B"], "2025-01-01", "2025-03-31")
+    df_backfilled = _aplicar_backfill(df_completo, ["A", "B"], meses)
+    qtd_fixa = _quantidades_fixas_cesta(quantidades, ["A", "B"])
+
+    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, ["A", "B"], qtd_fixa)
+    tabela = _montar_tabela_composicao_cesta(
+        quantidades, custos, df_backfilled, ["A", "B"], {"A": "KG", "B": "KG"}
+    )
+
+    custo_ultimo_mes = df_cesta.set_index("ano_mes")["custo_cesta"]["2025-03"]
+    assert custo_ultimo_mes == pytest.approx(3 * 12.0 + 0.5 * 4.0)
+    assert tabela["Custo no Último Mês"].sum() == pytest.approx(custo_ultimo_mes)
+
+
+# ---------------------------------------------------------------------------
+# Período padrão dos relatórios
+# ---------------------------------------------------------------------------
+
+def test_periodo_padrao_termina_no_ultimo_mes_com_nota():
+    """Os 12 meses padrão terminam no último mês com nota, não no mês atual.
+
+    Regressão: com o último dado em nov/2025, o padrão (últimos 12 meses a
+    partir de hoje) caía quase inteiro fora dos dados.
+    """
+    inicio, fim = _periodo_padrao(["2025-01", "2025-09", "2025-11"], datetime(2026, 10, 26).date())
+
+    assert (inicio.isoformat(), fim.isoformat()) == ("2024-12-01", "2025-11-30")
+
+
+def test_periodo_padrao_sem_notas_termina_hoje():
+    inicio, fim = _periodo_padrao([], datetime(2026, 10, 26).date())
+
+    assert (inicio.isoformat(), fim.isoformat()) == ("2025-11-01", "2026-10-26")
