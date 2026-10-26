@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, List
 
 import pandas as pd
@@ -16,6 +17,12 @@ from src.database import (
     listar_revisoes_manuais,
     registrar_revisoes_manuais,
 )
+from src.medidas import extrair_tamanho, tamanho_detectado
+
+# Origem do tamanho exibida no editor
+# Palpite da IA só entra nos relatórios depois de confirmado
+_ORIGEM_IA = "IA (a confirmar)"
+_ORIGENS_TAMANHO = {"usuario": "você", "ia": _ORIGEM_IA}
 
 # Modelos de IA disponíveis (obtidos de forma centralizada)
 MODELOS_IA = obter_modelos_com_nomes_amigaveis()
@@ -134,6 +141,12 @@ def _formatar_rotulo(nota: NotaParaRevisao) -> str:
 def _montar_editor(itens: List[ItemNotaRevisao]) -> pd.DataFrame:
     linhas: List[dict[str, Any]] = []
     for item in itens:
+        # Tamanho informado (você ou IA) ou, na falta, o lido da descrição da nota
+        detectado = tamanho_detectado(item.descricao)
+        if item.tamanho:
+            tamanho, origem = item.tamanho, _ORIGENS_TAMANHO.get(item.tamanho_fonte or "", "")
+        else:
+            tamanho, origem = detectado, "nota" if detectado else ""
         linhas.append(
             {
                 "sequencia": item.sequencia,
@@ -143,24 +156,62 @@ def _montar_editor(itens: List[ItemNotaRevisao]) -> pd.DataFrame:
                 "produto_marca": item.produto_marca or "",
                 "quantidade": float(item.quantidade or 0),
                 "valor_total": float(item.valor_total or 0),
+                "tamanho": tamanho,
+                "origem_tamanho": origem,
             }
         )
     return pd.DataFrame(linhas)
 
 
-def _converter_registros(df: pd.DataFrame, chave_acesso: str, observacoes: str | None) -> List[dict[str, Any]]:
+def _mesmo_tamanho(texto: str, descricao: str | None) -> bool:
+    """Indica se o texto digitado é o mesmo tamanho que a descrição já informa."""
+    digitado, da_descricao = extrair_tamanho(texto), extrair_tamanho(descricao)
+    return (
+        digitado is not None
+        and da_descricao is not None
+        and digitado[1] == da_descricao[1]
+        and math.isclose(digitado[0], da_descricao[0])
+    )
+
+
+def _converter_registros(
+    df: pd.DataFrame,
+    chave_acesso: str,
+    observacoes: str | None,
+    df_base: pd.DataFrame | None = None,
+    *,
+    confirmar: bool = False,
+) -> List[dict[str, Any]]:
+    """Registros para registrar_revisoes_manuais.
+
+    O tamanho só vai quando foi alterado no editor (comparado a ``df_base``)
+    ou, ao confirmar os ajustes, quando é um palpite da IA: confirmar a nota
+    aceita o tamanho exibido. Salvar rascunho não confirma o palpite. Tamanho
+    igual ao da descrição vai vazio: não precisa ser gravado.
+    """
+    originais = (
+        dict(zip(df_base["sequencia"], df_base["tamanho"])) if df_base is not None else {}
+    )
+    palpites_ia = (
+        set(df_base.loc[df_base["origem_tamanho"] == _ORIGEM_IA, "sequencia"])
+        if df_base is not None and "origem_tamanho" in df_base
+        else set()
+    )
     registros: List[dict[str, Any]] = []
     for linha in df.to_dict("records"):
-        registros.append(
-            {
-                "chave_acesso": chave_acesso,
-                "sequencia": linha["sequencia"],
-                "categoria": (linha.get("categoria") or "").strip() or None,
-                "produto_nome": (linha.get("produto_nome") or "").strip() or None,
-                "produto_marca": (linha.get("produto_marca") or "").strip() or None,
-                "observacoes": (observacoes or "").strip() or None,
-            }
-        )
+        registro = {
+            "chave_acesso": chave_acesso,
+            "sequencia": linha["sequencia"],
+            "categoria": (linha.get("categoria") or "").strip() or None,
+            "produto_nome": (linha.get("produto_nome") or "").strip() or None,
+            "produto_marca": (linha.get("produto_marca") or "").strip() or None,
+            "observacoes": (observacoes or "").strip() or None,
+        }
+        tamanho = linha["tamanho"] if isinstance(linha.get("tamanho"), str) else ""
+        alterado = tamanho.strip() != (originais.get(linha["sequencia"]) or "").strip()
+        if alterado or (confirmar and linha["sequencia"] in palpites_ia and tamanho.strip()):
+            registro["tamanho"] = "" if _mesmo_tamanho(tamanho, linha.get("descricao")) else tamanho
+        registros.append(registro)
     return registros
 
 
@@ -250,6 +301,14 @@ def render_pagina_analise() -> None:
                 "categoria": st.column_config.TextColumn("Categoria"),
                 "produto_nome": st.column_config.TextColumn("Produto (nome base)"),
                 "produto_marca": st.column_config.TextColumn("Marca"),
+                "tamanho": st.column_config.TextColumn(
+                    "Tamanho",
+                    help="Peso ou volume da embalagem (ex.: 473ml, 1kg). Vem da descrição da "
+                         "nota ou é um palpite da IA, que só entra nos relatórios depois que você "
+                         "confirmar os ajustes. Corrija ou preencha quando faltar; vale para as "
+                         "outras compras com a mesma descrição. Usado no preço por kg/litro.",
+                ),
+                "origem_tamanho": st.column_config.TextColumn("Origem do tamanho", disabled=True),
             },
         )
 
@@ -271,7 +330,9 @@ def render_pagina_analise() -> None:
         st.session_state["usuario_revisao"] = usuario_limpo
 
     if salvar or confirmar:
-        registros = _converter_registros(df_editado, nota.chave_acesso, observacoes)
+        registros = _converter_registros(
+            df_editado, nota.chave_acesso, observacoes, df_base, confirmar=confirmar
+        )
         try:
             registrar_revisoes_manuais(
                 registros,

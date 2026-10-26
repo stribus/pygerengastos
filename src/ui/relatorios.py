@@ -10,14 +10,15 @@ import pandas as pd
 import streamlit as st
 
 from src.database import (
+    obter_compras_fora_da_unidade,
     obter_custos_unitarios_mensais,
     obter_meses_com_notas,
     obter_quantidades_mensais_produtos,
-    obter_top_produtos_por_quantidade,
+    obter_top_produtos_por_gasto,
     obter_unidades_produtos,
 )
+from src.medidas import normalizar_unidade
 
-UNIDADES_FRACIONAVEIS = {"KG", "G", "L", "ML", "MG"}
 JANELA_REGULARIDADE_MESES = 6
 QTD_MINIMA_MES_UNITARIO = 1.0
 MEDIA_MINIMA_MENSAL_FRACIONAVEL = 0.1
@@ -25,7 +26,24 @@ MEDIA_MINIMA_MENSAL_FRACIONAVEL = 0.1
 
 def _eh_unidade_fracionavel(unidade: str | None) -> bool:
     """Indica se a unidade representa produto vendido fracionado (peso/volume)."""
-    return (unidade or "UN").strip().upper() in UNIDADES_FRACIONAVEIS
+    return normalizar_unidade(unidade) in ("KG", "L")
+
+
+def _rotulo_produto(produto: str, unidade: str | None) -> str:
+    """Nome do produto com a medida do preço: "Coxa Frango (R$/kg)"."""
+    return f"{produto} (R$/{(unidade or 'UN').lower()})"
+
+
+def _avisar_compras_fora_da_unidade(descartadas: dict[str, int]) -> None:
+    """Informa as compras que ficaram fora do gráfico por estarem em outra medida."""
+    total = sum(descartadas.values())
+    if total:
+        detalhe = ", ".join(f"{produto}: {qtd}" for produto, qtd in descartadas.items())
+        st.caption(
+            f"ℹ️ {total} compra(s) ficaram fora do gráfico por estarem numa medida "
+            f"diferente da principal do produto (ex.: descrição sem o tamanho da "
+            f"embalagem): {detalhe}."
+        )
 
 
 def _calcular_variacao_percentual(valor_anterior: float, valor_atual: float) -> float:
@@ -396,8 +414,8 @@ def render_grafico_custos_unitarios() -> None:
     """Renderiza gráfico de custos unitários mensais dos produtos."""
     st.subheader("📊 Custos Unitários Mensais - Top 10 Produtos")
     st.write(
-        "Visualize a evolução dos preços unitários dos produtos mais comprados "
-        "ao longo do tempo."
+        "Visualize a evolução dos preços dos 10 produtos com maior gasto ao longo do "
+        "tempo, por quilo, litro ou unidade."
     )
 
     # Filtros de período
@@ -426,8 +444,8 @@ def render_grafico_custos_unitarios() -> None:
         return
 
     # Buscar top 10 produtos
-    with st.spinner("Carregando produtos mais comprados..."):
-        top_produtos = obter_top_produtos_por_quantidade(
+    with st.spinner("Carregando produtos com maior gasto..."):
+        top_produtos = obter_top_produtos_por_gasto(
             data_inicio=data_inicio.isoformat(),
             data_fim=data_fim.isoformat(),
             top_n=10,
@@ -454,8 +472,17 @@ def render_grafico_custos_unitarios() -> None:
     # Converter para DataFrame
     df = pd.DataFrame(custos)
 
-    # Buscar unidades dos produtos
-    unidades = obter_unidades_produtos(produtos_nomes)
+    # Medida base de cada produto (KG, L, UN...) e compras que ficaram de fora
+    unidades = obter_unidades_produtos(
+        produtos_nomes,
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    )
+    _avisar_compras_fora_da_unidade(obter_compras_fora_da_unidade(
+        produtos_nomes,
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    ))
 
     # Adicionar seletor de produtos visíveis
     st.write("**Produtos disponíveis** (marque para exibir no gráfico):")
@@ -463,8 +490,7 @@ def render_grafico_custos_unitarios() -> None:
     produtos_visiveis = []
     cols = st.columns(2)
     for idx, produto in enumerate(produtos_nomes):
-        unidade = unidades.get(produto, "UN")
-        rotulo = f"{produto} ({unidade})"
+        rotulo = _rotulo_produto(produto, unidades.get(produto))
 
         col_idx = idx % 2
         with cols[col_idx]:
@@ -487,7 +513,7 @@ def render_grafico_custos_unitarios() -> None:
     )
 
     # Renomear colunas com unidades
-    df_pivot.columns = [f"{col} ({unidades.get(col, 'UN')})" for col in df_pivot.columns]
+    df_pivot.columns = [_rotulo_produto(col, unidades.get(col)) for col in df_pivot.columns]
 
     st.line_chart(df_pivot)
 
@@ -541,8 +567,8 @@ def render_grafico_inflacao() -> None:
         return
 
     # Buscar top 10 produtos
-    with st.spinner("Carregando produtos mais comprados..."):
-        top_produtos = obter_top_produtos_por_quantidade(
+    with st.spinner("Carregando produtos com maior gasto..."):
+        top_produtos = obter_top_produtos_por_gasto(
             data_inicio=data_inicio.isoformat(),
             data_fim=data_fim.isoformat(),
             top_n=10,
@@ -573,8 +599,17 @@ def render_grafico_inflacao() -> None:
         data_fim=data_fim.isoformat(),
     )
 
-    # Buscar unidades dos produtos (regra de regularidade e rótulos do gráfico)
-    unidades = obter_unidades_produtos(produtos_nomes)
+    # Medida base de cada produto (regra de regularidade e rótulos do gráfico)
+    unidades = obter_unidades_produtos(
+        produtos_nomes,
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    )
+    _avisar_compras_fora_da_unidade(obter_compras_fora_da_unidade(
+        produtos_nomes,
+        data_inicio=data_inicio.isoformat(),
+        data_fim=data_fim.isoformat(),
+    ))
 
     # Meses com nota importada: mês sem nenhuma nota é lacuna de coleta, não de
     # compra, e por isso não conta contra a regularidade dos produtos
@@ -666,8 +701,7 @@ def render_grafico_inflacao() -> None:
     produtos_visiveis = []
     cols = st.columns(2)
     for idx, produto in enumerate(produtos_nomes):
-        unidade = unidades.get(produto, "UN")
-        rotulo = f"{produto} ({unidade})"
+        rotulo = _rotulo_produto(produto, unidades.get(produto))
         eh_regular = " ⭐" if produto in produtos_regulares else ""
 
         col_idx = idx % 2
@@ -709,8 +743,7 @@ def render_grafico_inflacao() -> None:
     # Adicionar produtos selecionados
     for produto in produtos_visiveis:
         if produto in inflacao_por_produto:
-            unidade = unidades.get(produto, "UN")
-            df_inflacao[f"{produto} ({unidade})"] = inflacao_por_produto[produto]
+            df_inflacao[_rotulo_produto(produto, unidades.get(produto))] = inflacao_por_produto[produto]
 
     # Adicionar inflação média
     if mostrar_media:
@@ -748,7 +781,7 @@ def render_grafico_inflacao() -> None:
 
     # Renomear colunas para incluir unidade e tipo de dado
     df_precos.columns = [
-        f"{col} - Preço ({unidades.get(col, 'UN')})"
+        f"{col} - Preço (R$/{unidades.get(col, 'UN').lower()})"
         for col in df_precos.columns
     ]
 
@@ -783,8 +816,7 @@ def render_grafico_inflacao() -> None:
     # 4. Intercalar colunas de preço e inflação para cada produto
     colunas_ordenadas = ["Mês"]
     for produto in produtos_nomes:
-        unidade = unidades.get(produto, "UN")
-        col_preco = f"{produto} - Preço ({unidade})"
+        col_preco = f"{produto} - Preço (R$/{unidades.get(produto, 'UN').lower()})"
         col_inflacao = f"{produto} - Inflação (%)"
         if col_preco in df_precos.columns:
             colunas_ordenadas.append(col_preco)
@@ -891,7 +923,10 @@ def render_grafico_inflacao() -> None:
                 os meses com compra no período selecionado (não confundir com a média da janela
                 de 6 meses, usada apenas no critério de regularidade).
 
-                **Preço Médio:** Preço unitário médio do produto no período.
+                **Preço Médio:** Preço médio do produto no período, por quilo, litro ou
+                unidade. Produtos vendidos por unidade com o tamanho na descrição
+                ("ARROZ 5KG", "CERVEJA 473ML") entram pelo peso ou volume; compras em
+                outra medida (ex.: descrição sem o tamanho) ficam de fora.
 
                 **Custo Mensal Médio:** Quantidade média × Preço médio.
 

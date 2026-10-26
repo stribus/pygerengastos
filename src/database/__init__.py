@@ -21,6 +21,7 @@ from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
 from src.scrapers.receita_rs import NotaFiscal, NotaItem, Pagamento
 from src.logger import setup_logging
+from src.medidas import extrair_tamanho, medida_base, normalizar_unidade
 
 logger = setup_logging("database")
 
@@ -251,6 +252,7 @@ class ItemParaClassificacao:
 	categoria_confirmada: Optional[str]
 	emitente_nome: Optional[str]
 	emissao_iso: Optional[str]
+	tamanho: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -292,6 +294,8 @@ class ItemNotaRevisao:
 	categoria_confirmada: str | None
 	produto_nome: str | None
 	produto_marca: str | None
+	tamanho: str | None = None
+	tamanho_fonte: str | None = None
 
 
 @dataclass(slots=True)
@@ -641,6 +645,8 @@ def _aplicar_schema(con: sqlite3.Connection) -> None:
 		"ALTER TABLE itens ADD COLUMN categoria_sugerida_id INTEGER",
 		"ALTER TABLE itens ADD COLUMN categoria_confirmada_id INTEGER",
 		"ALTER TABLE notas ADD COLUMN desconto DECIMAL(18, 2)",
+		"ALTER TABLE itens ADD COLUMN tamanho TEXT",
+		"ALTER TABLE itens ADD COLUMN tamanho_fonte TEXT",
 	]
 
 	for migration in migrations:
@@ -967,7 +973,9 @@ def listar_itens_para_revisao(
 			categoria_sugerida,
 			categoria_confirmada,
 			produto_nome,
-			produto_marca
+			produto_marca,
+			tamanho,
+			tamanho_fonte
 		FROM itens
 		WHERE {' AND '.join(condicoes)}
 		ORDER BY sequencia
@@ -987,6 +995,8 @@ def listar_itens_para_revisao(
 			categoria_confirmada=row[6],
 			produto_nome=row[7],
 			produto_marca=row[8],
+			tamanho=row[9],
+			tamanho_fonte=row[10],
 		)
 		for row in rows
 	]
@@ -1100,7 +1110,8 @@ def listar_itens_para_classificacao(
 				i.categoria_sugerida,
 				i.categoria_confirmada,
 				n.emitente_nome,
-				n.emissao_iso
+				n.emissao_iso,
+				i.tamanho
 			FROM itens i
 			JOIN notas n ON n.chave_acesso = i.chave_acesso
 			WHERE {where_sql}
@@ -1124,6 +1135,7 @@ def listar_itens_para_classificacao(
 			categoria_confirmada=row[9],
 			emitente_nome=row[10],
 			emissao_iso=row[11],
+			tamanho=row[12],
 		)
 		for row in rows
 	]
@@ -1301,6 +1313,9 @@ def registrar_classificacao_itens(
 				if produto_id:
 					_apontar_alias_da_descricao(con, chave, seq, produto_id)
 
+				if item.get("tamanho"):
+					_aplicar_tamanho(con, chave, seq, item["tamanho"], "ia")
+
 			con.execute("COMMIT")
 
 			# Atualizar embeddings após classificação (LLM ou cache semântico)
@@ -1387,6 +1402,74 @@ def limpar_classificacoes_completas(
 		return cursor.rowcount
 
 
+def _aplicar_tamanho(
+	con: sqlite3.Connection,
+	chave: str,
+	sequencia: int,
+	tamanho: str | None,
+	fonte: str,
+) -> None:
+	"""Grava o tamanho da embalagem de um item e o propaga para a mesma descrição.
+
+	Fontes: "usuario" (revisão manual) vale sobre tudo e substitui palpites da
+	IA; "ia" só preenche item sem tamanho, vendido por unidade e cuja descrição
+	não traz o tamanho. A propagação alcança os itens com a mesma descrição
+	que ainda não têm tamanho (ou têm o da IA, se a fonte for o usuário).
+	Tamanho vazio do usuário limpa só o próprio item.
+	"""
+	row = con.execute(
+		"SELECT descricao, unidade, tamanho FROM itens WHERE chave_acesso = ? AND sequencia = ?",
+		[chave, sequencia],
+	).fetchone()
+	if row is None:
+		return
+	descricao, unidade, tamanho_atual = row
+	tamanho = " ".join((tamanho or "").upper().split()) or None
+	if tamanho and extrair_tamanho(tamanho) is None:
+		return
+
+	if fonte == "ia":
+		if (
+			not tamanho
+			or tamanho_atual
+			or normalizar_unidade(unidade) in ("KG", "L")
+			or extrair_tamanho(descricao) is not None
+		):
+			return
+		substituiveis = "tamanho IS NULL"
+	else:
+		substituiveis = "(tamanho IS NULL OR tamanho_fonte = 'ia')"
+
+	con.execute(
+		"UPDATE itens SET tamanho = ?, tamanho_fonte = ? WHERE chave_acesso = ? AND sequencia = ?",
+		[tamanho, fonte if tamanho else None, chave, sequencia],
+	)
+	if tamanho:
+		con.execute(
+			f"""
+			UPDATE itens SET tamanho = ?, tamanho_fonte = ?
+			WHERE upper(trim(descricao)) = upper(trim(?)) AND {substituiveis}
+			""",
+			[tamanho, fonte, descricao],
+		)
+
+
+def _tamanho_herdado(con: sqlite3.Connection, item: NotaItem) -> tuple[str | None, str | None]:
+	"""Tamanho já informado para a mesma descrição, para um item novo que precisa dele."""
+	if normalizar_unidade(item.unidade) in ("KG", "L") or extrair_tamanho(item.descricao) is not None:
+		return None, None
+	row = con.execute(
+		"""
+		SELECT tamanho, tamanho_fonte FROM itens
+		WHERE upper(trim(descricao)) = upper(trim(?)) AND tamanho IS NOT NULL
+		ORDER BY tamanho_fonte = 'usuario' DESC, atualizado_em DESC
+		LIMIT 1
+		""",
+		[item.descricao or ""],
+	).fetchone()
+	return (row[0], row[1]) if row else (None, None)
+
+
 def registrar_revisoes_manuais(
 	registros: Sequence[Mapping[str, Any]],
 	*,
@@ -1402,6 +1485,20 @@ def registrar_revisoes_manuais(
 
 	usuario_limpo = _limpar_texto_curto(usuario)
 	observacao_padrao = _limpar_texto_curto(observacoes_padrao)
+
+	# Tamanho da embalagem informado na revisão ("473ml"): validado antes de
+	# gravar qualquer coisa; vazio remove o informado
+	tamanhos: list[tuple[str | None, str, int]] = []
+	for registro in registros:
+		if "tamanho" not in registro or not registro.get("chave_acesso") or registro.get("sequencia") is None:
+			continue
+		tamanho = " ".join((registro.get("tamanho") or "").upper().split()) or None
+		if tamanho and extrair_tamanho(tamanho) is None:
+			raise ValueError(
+				f"Tamanho '{registro.get('tamanho')}' inválido no item {registro['sequencia']}: "
+				"use peso ou volume, como 500g, 1kg, 473ml ou 2l."
+			)
+		tamanhos.append((tamanho, registro["chave_acesso"], int(registro["sequencia"])))
 
 	itens_para_classificar: list[dict[str, Any]] = []
 	logs: list[tuple[object, ...]] = []
@@ -1448,10 +1545,16 @@ def registrar_revisoes_manuais(
 			)
 		)
 
+	if itens_para_classificar:
+		registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
+
+	if tamanhos:
+		with conexao(db_path) as con:
+			for tamanho, chave, sequencia in tamanhos:
+				_aplicar_tamanho(con, chave, sequencia, tamanho, "usuario")
+
 	if not itens_para_classificar:
 		return
-
-	registrar_classificacao_itens(itens_para_classificar, confirmar=confirmar, db_path=db_path)
 
 	# Atualizar embeddings quando o usuário confirma manualmente
 	if confirmar:
@@ -1741,6 +1844,7 @@ def _persistir_itens(
 		produto_id = produto.id if produto else None
 		produto_nome = produto.nome_base if produto else None
 		produto_marca = produto.marca_base if produto else None
+		tamanho, tamanho_fonte = _tamanho_herdado(con, item)
 		con.execute(
 			"""
 			INSERT INTO itens (
@@ -1761,8 +1865,10 @@ def _persistir_itens(
 				categoria_confirmada_id,
 				fonte_classificacao,
 				confianca_classificacao,
+				tamanho,
+				tamanho_fonte,
 				atualizado_em
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP)
 			""",
 			[
 				chave,
@@ -1776,6 +1882,8 @@ def _persistir_itens(
 				produto_id,
 				produto_nome,
 				produto_marca,
+				tamanho,
+				tamanho_fonte,
 			],
 		)
 
@@ -2259,19 +2367,20 @@ def obter_gastos_por_categoria(*, mes_iso: str | None = None, db_path: Path | st
 	]
 
 
-def obter_top_produtos_por_quantidade(
+def obter_top_produtos_por_gasto(
 	*,
 	data_inicio: str | None = None,
 	data_fim: str | None = None,
 	top_n: int = 10,
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
-	"""Retorna os produtos mais comprados por quantidade total no período.
+	"""Retorna os produtos com maior gasto no período.
 
-	Agrupa por produto_nome (ignorando marcas), retornando nome do produto
-	e quantidade total comprada.
+	Agrupa pelo produto consolidado (produto_id, ignorando marcas) e ordena pelo
+	valor gasto: quantidades de unidades diferentes (kg, litro, caixa) não são
+	comparáveis entre produtos. Retorna produto_id, produto_nome e gasto_total.
 	"""
-	filtros = ["i.produto_nome IS NOT NULL", "n.emissao_data IS NOT NULL"]
+	filtros = ["n.emissao_data IS NOT NULL"]
 	params: list[object] = []
 
 	if data_inicio:
@@ -2285,13 +2394,15 @@ def obter_top_produtos_por_quantidade(
 
 	query = f"""
 		SELECT
-			i.produto_nome,
-			SUM(i.quantidade) as quantidade_total
+			p.id,
+			p.nome_base,
+			SUM(i.valor_total) as gasto_total
 		FROM itens i
+		JOIN produtos p ON p.id = i.produto_id
 		JOIN notas n ON n.chave_acesso = i.chave_acesso
 		WHERE {where_clause}
-		GROUP BY i.produto_nome
-		ORDER BY quantidade_total DESC
+		GROUP BY p.id
+		ORDER BY gasto_total DESC, p.nome_base
 		LIMIT ?
 	"""
 	params.append(top_n)
@@ -2301,11 +2412,109 @@ def obter_top_produtos_por_quantidade(
 
 	return [
 		{
-			"produto_nome": row[0],
-			"quantidade_total": float(_para_decimal(row[1]) or Decimal("0"))
+			"produto_id": row[0],
+			"produto_nome": row[1],
+			"gasto_total": float(_para_decimal(row[2]) or Decimal("0")),
 		}
 		for row in rows
 	]
+
+
+def _compras_por_medida(
+	produtos: list[str],
+	data_inicio: str | None,
+	data_fim: str | None,
+	db_path: Path | str | None,
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, int]]:
+	"""Compras dos ``produtos`` na medida base (src.medidas), só na unidade dominante.
+
+	Cada compra é convertida para KG ou L quando o peso ou volume é conhecido, ou
+	fica na unidade de venda (UN, CX). Por produto, vale a unidade base com mais
+	gasto no período; compras em outra unidade (ex.: descrição truncada, sem o
+	tamanho) não são comparáveis e ficam de fora.
+
+	Retorna (compras, unidade por produto, compras descartadas por produto). Os
+	produtos são identificados pelo nome do produto consolidado (nome_base).
+	"""
+	if not produtos:
+		return [], {}, {}
+
+	filtros = [
+		"p.nome_base IN ({})".format(",".join("?" * len(produtos))),
+		"n.emissao_data IS NOT NULL",
+		"i.quantidade > 0",
+		"i.valor_total IS NOT NULL",
+	]
+	params: list[object] = list(produtos)
+
+	if data_inicio:
+		filtros.append("n.emissao_data >= ?")
+		params.append(data_inicio)
+	if data_fim:
+		filtros.append("n.emissao_data <= ?")
+		params.append(data_fim)
+
+	query = f"""
+		SELECT
+			p.nome_base,
+			strftime('%Y-%m', n.emissao_data) as ano_mes,
+			i.quantidade,
+			i.unidade,
+			i.descricao,
+			i.tamanho,
+			i.tamanho_fonte,
+			i.valor_total
+		FROM itens i
+		JOIN produtos p ON p.id = i.produto_id
+		JOIN notas n ON n.chave_acesso = i.chave_acesso
+		WHERE {" AND ".join(filtros)}
+		ORDER BY p.nome_base, ano_mes
+	"""
+
+	with conexao(db_path) as con:
+		rows = con.execute(query, params).fetchall()
+
+	compras = []
+	gasto_por_unidade: dict[tuple[str, str], float] = {}
+	for produto, ano_mes, quantidade, unidade, descricao, tamanho, fonte, valor_total in rows:
+		# Palpite da IA é só sugestão até o usuário confirmar na tela de análise
+		tamanho_valido = tamanho if fonte != "ia" else None
+		qtd_base, unidade_base = medida_base(float(quantidade), unidade, descricao, tamanho_valido)
+		valor = float(valor_total)
+		compras.append({
+			"produto_nome": produto,
+			"ano_mes": ano_mes,
+			"quantidade": qtd_base,
+			"unidade": unidade_base,
+			"valor_total": valor,
+		})
+		chave = (produto, unidade_base)
+		gasto_por_unidade[chave] = gasto_por_unidade.get(chave, 0.0) + valor
+
+	unidades: dict[str, str] = {}
+	for (produto, unidade_base), gasto in sorted(gasto_por_unidade.items()):
+		if produto not in unidades or gasto > gasto_por_unidade[(produto, unidades[produto])]:
+			unidades[produto] = unidade_base
+
+	descartadas: dict[str, int] = {}
+	dominantes = []
+	for compra in compras:
+		if compra["unidade"] == unidades[compra["produto_nome"]]:
+			dominantes.append(compra)
+		else:
+			descartadas[compra["produto_nome"]] = descartadas.get(compra["produto_nome"], 0) + 1
+
+	return dominantes, unidades, descartadas
+
+
+def _somar_por_produto_mes(compras: list[dict[str, Any]]) -> dict[tuple[str, str], tuple[float, float]]:
+	"""(produto, ano_mes) -> (quantidade base, valor gasto), na ordem das compras."""
+	somas: dict[tuple[str, str], tuple[float, float]] = {}
+	for compra in compras:
+		chave = (compra["produto_nome"], compra["ano_mes"])
+		qtd, valor = somas.get(chave, (0.0, 0.0))
+		somas[chave] = (qtd + compra["quantidade"], valor + compra["valor_total"])
+	return somas
 
 
 def obter_custos_unitarios_mensais(
@@ -2315,90 +2524,50 @@ def obter_custos_unitarios_mensais(
 	data_fim: str | None = None,
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
-	"""Retorna custos unitários médios mensais para uma lista de produtos.
+	"""Retorna o preço médio mensal por medida base (R$/kg, R$/L ou R$/un).
 
-	Para cada produto e mês, calcula o custo unitário médio ponderado.
+	Para cada produto e mês: gasto total ÷ quantidade na medida base, só com as
+	compras na unidade dominante do produto (ver _compras_por_medida).
 	Retorna lista com: produto_nome, ano_mes, custo_unitario_medio.
 	"""
-	if not produtos:
-		return []
-
-	filtros = ["i.produto_nome IN ({})".format(",".join("?" * len(produtos)))]
-	params: list[object] = list(produtos)
-
-	filtros.append("n.emissao_data IS NOT NULL")
-	filtros.append("i.quantidade IS NOT NULL")
-	filtros.append("i.quantidade > 0")
-	filtros.append("i.valor_unitario IS NOT NULL")
-
-	if data_inicio:
-		filtros.append("n.emissao_data >= ?")
-		params.append(data_inicio)
-	if data_fim:
-		filtros.append("n.emissao_data <= ?")
-		params.append(data_fim)
-
-	where_clause = " AND ".join(filtros)
-
-	query = f"""
-		SELECT
-			i.produto_nome,
-			strftime('%Y-%m', n.emissao_data) as ano_mes,
-			SUM(i.valor_total) / SUM(i.quantidade) as custo_unitario_medio
-		FROM itens i
-		JOIN notas n ON n.chave_acesso = i.chave_acesso
-		WHERE {where_clause}
-		GROUP BY i.produto_nome, ano_mes
-		ORDER BY i.produto_nome, ano_mes
-	"""
-
-	with conexao(db_path) as con:
-		rows = con.execute(query, params).fetchall()
+	compras, _, _ = _compras_por_medida(produtos, data_inicio, data_fim, db_path)
 
 	return [
 		{
-			"produto_nome": row[0],
-			"ano_mes": row[1],
-			"custo_unitario_medio": float(_para_decimal(row[2]) or Decimal("0"))
+			"produto_nome": produto,
+			"ano_mes": ano_mes,
+			"custo_unitario_medio": valor / qtd,
 		}
-		for row in rows
+		for (produto, ano_mes), (qtd, valor) in _somar_por_produto_mes(compras).items()
 	]
 
 
 def obter_unidades_produtos(
 	produtos: list[str],
 	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
 	db_path: Path | str | None = None,
 ) -> dict[str, str]:
-	"""Retorna mapeamento de produto_nome para unidade mais comum."""
-	if not produtos:
-		return {}
-
-	placeholders = ",".join("?" * len(produtos))
-	query = f"""
-		SELECT
-			produto_nome,
-			unidade,
-			COUNT(*) as freq
-		FROM itens
-		WHERE produto_nome IN ({placeholders})
-		AND unidade IS NOT NULL
-		GROUP BY produto_nome, unidade
-		ORDER BY produto_nome, freq DESC
-	"""
-
-	with conexao(db_path) as con:
-		rows = con.execute(query, list(produtos)).fetchall()
-
-	# Pega a unidade mais frequente para cada produto
-	unidades: dict[str, str] = {}
-	for row in rows:
-		produto = row[0]
-		unidade = row[1]
-		if produto not in unidades:
-			unidades[produto] = unidade
-
+	"""Retorna a medida base de cada produto no período (KG, L, UN ou CX)."""
+	_, unidades, _ = _compras_por_medida(produtos, data_inicio, data_fim, db_path)
 	return unidades
+
+
+def obter_compras_fora_da_unidade(
+	produtos: list[str],
+	*,
+	data_inicio: str | None = None,
+	data_fim: str | None = None,
+	db_path: Path | str | None = None,
+) -> dict[str, int]:
+	"""Compras de cada produto deixadas fora dos relatórios por estarem em outra medida.
+
+	Ex.: o produto é medido em litros, mas uma compra veio com a descrição
+	truncada, sem o tamanho, e só se sabe que foi 1 unidade.
+	"""
+	_, _, descartadas = _compras_por_medida(produtos, data_inicio, data_fim, db_path)
+	return descartadas
 
 
 def obter_quantidades_mensais_produtos(
@@ -2408,52 +2577,19 @@ def obter_quantidades_mensais_produtos(
 	data_fim: str | None = None,
 	db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
-	"""Retorna quantidades compradas mensalmente para uma lista de produtos.
+	"""Retorna quantidades compradas mensalmente, na medida base de cada produto.
 
-	Para cada produto e mês, retorna a quantidade total comprada.
 	Retorna lista com: produto_nome, ano_mes, quantidade_total.
 	"""
-	if not produtos:
-		return []
-
-	filtros = ["i.produto_nome IN ({})".format(",".join("?" * len(produtos)))]
-	params: list[object] = list(produtos)
-
-	filtros.append("n.emissao_data IS NOT NULL")
-	filtros.append("i.quantidade IS NOT NULL")
-	filtros.append("i.quantidade > 0")
-
-	if data_inicio:
-		filtros.append("n.emissao_data >= ?")
-		params.append(data_inicio)
-	if data_fim:
-		filtros.append("n.emissao_data <= ?")
-		params.append(data_fim)
-
-	where_clause = " AND ".join(filtros)
-
-	query = f"""
-		SELECT
-			i.produto_nome,
-			strftime('%Y-%m', n.emissao_data) as ano_mes,
-			SUM(i.quantidade) as quantidade_total
-		FROM itens i
-		JOIN notas n ON n.chave_acesso = i.chave_acesso
-		WHERE {where_clause}
-		GROUP BY i.produto_nome, ano_mes
-		ORDER BY i.produto_nome, ano_mes
-	"""
-
-	with conexao(db_path) as con:
-		rows = con.execute(query, params).fetchall()
+	compras, _, _ = _compras_por_medida(produtos, data_inicio, data_fim, db_path)
 
 	return [
 		{
-			"produto_nome": row[0],
-			"ano_mes": row[1],
-			"quantidade_total": float(_para_decimal(row[2]) or Decimal("0"))
+			"produto_nome": produto,
+			"ano_mes": ano_mes,
+			"quantidade_total": qtd,
 		}
-		for row in rows
+		for (produto, ano_mes), (qtd, _) in _somar_por_produto_mes(compras).items()
 	]
 
 

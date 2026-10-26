@@ -17,6 +17,7 @@ from src.database import (
 )
 
 from src.logger import setup_logging
+from src.medidas import extrair_tamanho, normalizar_unidade
 from .llm_classifier import ClassificacaoResultado, LLMClassifier
 from .embeddings import SIMILARIDADE_MINIMA, buscar_produtos_semelhantes
 
@@ -200,18 +201,8 @@ def classificar_itens_pendentes(
 		if progress_callback:
 			progress_callback(f"Preparando {len(itens_para_llm)} item(ns) para classificação via LLM...")
 
-		categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
-
 		if classifier is None:
-			# Garantir que o prompt sempre receba as categorias conhecidas
-			if model is not None and temperature is not None:
-				classifier = LLMClassifier(model=model, temperature=temperature, categorias=categorias)
-			elif model is not None:
-				classifier = LLMClassifier(model=model, categorias=categorias)
-			elif temperature is not None:
-				classifier = LLMClassifier(temperature=temperature, categorias=categorias)
-			else:
-				classifier = LLMClassifier(categorias=categorias)
+			classifier = _criar_classifier(model, temperature, db_path)
 
 		logger.info(f"Enviando {len(itens_para_llm)} itens para a API do LLM configurado.")
 		resultados_llm = classifier.classificar_itens(
@@ -234,9 +225,57 @@ def classificar_itens_pendentes(
 		if progress_callback:
 			progress_callback("Nenhum item necessita classificação via LLM.")
 
+	# 3. Tamanho da embalagem para os itens do cache semântico, que não passaram
+	# pela IA: só os vendidos por unidade e sem tamanho na descrição
+	itens_por_chave = {(item.chave_acesso, item.sequencia): item for item in itens}
+	sem_tamanho = [
+		(resultado, itens_por_chave[(resultado.chave_acesso, resultado.sequencia)])
+		for resultado in resultados_finais
+		if resultado.origem == "chroma-cache"
+		and _precisa_tamanho(itens_por_chave.get((resultado.chave_acesso, resultado.sequencia)))
+	]
+	if sem_tamanho:
+		if classifier is None:
+			classifier = _criar_classifier(model, temperature, db_path)
+		if progress_callback:
+			progress_callback(f"Buscando o tamanho da embalagem de {len(sem_tamanho)} item(ns) via IA...")
+		try:
+			tamanhos = classifier.sugerir_tamanhos(
+				[item for _, item in sem_tamanho], model_priority=model_priority
+			)
+		except Exception as exc:  # noqa: BLE001 - o tamanho nunca bloqueia a classificação
+			logger.warning("Não foi possível obter o tamanho das embalagens: %s", exc)
+			tamanhos = {}
+		for resultado, item in sem_tamanho:
+			resultado.tamanho = tamanhos.get((item.chave_acesso, item.sequencia))
+
 	_salvar_resultados(resultados_finais, confirmar=confirmar, db_path=db_path)
 	logger.info(f"Classificação concluída. {len(resultados_finais)} itens processados.")
 	return resultados_finais
+
+
+def _criar_classifier(
+	model: str | None, temperature: float | None, db_path: str | None
+) -> LLMClassifier:
+	# Garantir que o prompt sempre receba as categorias conhecidas
+	categorias = [categoria.nome for categoria in listar_categorias(db_path=db_path)]
+	if model is not None and temperature is not None:
+		return LLMClassifier(model=model, temperature=temperature, categorias=categorias)
+	if model is not None:
+		return LLMClassifier(model=model, categorias=categorias)
+	if temperature is not None:
+		return LLMClassifier(temperature=temperature, categorias=categorias)
+	return LLMClassifier(categorias=categorias)
+
+
+def _precisa_tamanho(item: ItemParaClassificacao | None) -> bool:
+	"""Item vendido por unidade, sem tamanho na descrição nem já informado."""
+	return (
+		item is not None
+		and not item.tamanho
+		and normalizar_unidade(item.unidade) not in ("KG", "L")
+		and extrair_tamanho(item.descricao) is None
+	)
 
 
 # Acima disso, a descrição é praticamente igual à indexada e a marca pode ser herdada
@@ -285,6 +324,7 @@ def _salvar_resultados(
 			"produto_nome": resultado.produto_nome,
 			"produto_marca": resultado.produto_marca,
 			"produto_id": resultado.produto_id,
+			"tamanho": resultado.tamanho,
 		}
 		for resultado in resultados
 	]

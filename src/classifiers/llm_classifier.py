@@ -16,6 +16,7 @@ from litellm import completion
 
 from src.database import ItemParaClassificacao
 from src.logger import setup_logging
+from src.medidas import extrair_tamanho
 
 logger = setup_logging(__name__)
 
@@ -312,6 +313,7 @@ class _RespostaLLM:
 	justificativa: str | None = None
 	produto_nome: str | None = None
 	produto_marca: str | None = None
+	tamanho: str | None = None
 
 
 LoadDotenvCallable = Callable[..., bool]
@@ -349,6 +351,7 @@ class ClassificacaoResultado:
 	produto_nome: str | None = None
 	produto_marca: str | None = None
 	produto_id: int | None = None
+	tamanho: str | None = None
 
 
 class LLMClassifier:
@@ -574,10 +577,86 @@ class LLMClassifier:
 						resposta_json=resposta_json,
 						produto_nome=resposta.produto_nome,
 						produto_marca=resposta.produto_marca,
+						tamanho=resposta.tamanho,
 					)
 				)
 
 		return resultados, nao_classificados
+
+	def sugerir_tamanhos(
+		self,
+		itens: Sequence[ItemParaClassificacao],
+		*,
+		model_priority: Sequence[str] | None = None,
+	) -> dict[tuple[str, int], str]:
+		"""Pede à IA só o tamanho da embalagem dos itens; retorna {(chave, sequência): "473ML"}.
+
+		Usado para itens que não passam pela classificação do LLM (cache
+		semântico) ou já classificados. Os itens são numerados pela posição no
+		lote, então notas diferentes podem ir juntas. Item sem resposta segura
+		fica de fora; lote com erro vai para o próximo modelo. O tamanho é
+		opcional: sem nenhum modelo disponível, retorna vazio.
+		"""
+		tamanhos: dict[tuple[str, int], str] = {}
+		pendentes = list(itens)
+		for modelo in self._resolver_model_priority(model_priority):
+			if not pendentes:
+				break
+			try:
+				config = self._obter_config_modelo(modelo)
+				api_key = self._obter_api_key(config)
+			except Exception as exc:  # noqa: BLE001 - o tamanho nunca bloqueia a classificação
+				logger.warning("Modelo %s indisponível para tamanhos: %s", modelo, _resumir_erro(exc))
+				continue
+			if not api_key:
+				continue
+			com_erro: list[ItemParaClassificacao] = []
+			for inicio in range(0, len(pendentes), config.max_itens):
+				lote = pendentes[inicio : inicio + config.max_itens]
+				try:
+					conteudo, _ = self._executar_chamada(
+						self._montar_payload_tamanhos(lote, config.nome), config=config, api_key=api_key
+					)
+					respostas = _interpretar_tamanhos(conteudo)
+				except Exception as exc:  # noqa: BLE001 - o tamanho nunca bloqueia a classificação
+					logger.warning("Falha ao pedir tamanhos a %s: %s", modelo, _resumir_erro(exc))
+					com_erro.extend(lote)
+					continue
+				for indice, item in enumerate(lote, start=1):
+					if respostas.get(indice):
+						tamanhos[(item.chave_acesso, item.sequencia)] = respostas[indice]
+			pendentes = com_erro
+		if pendentes:
+			logger.warning("%s item(ns) ficaram sem resposta de tamanho da IA.", len(pendentes))
+		return tamanhos
+
+	def _montar_payload_tamanhos(self, itens: Sequence[ItemParaClassificacao], modelo: str) -> dict[str, Any]:
+		linhas = "\n".join(f"- #{indice} — {item.descricao}" for indice, item in enumerate(itens, start=1))
+		# A lista entra depois do dedent: linhas inseridas sem recuo o anulariam
+		prompt = textwrap.dedent(
+			"""
+				Informe o peso ou volume da embalagem de cada produto de supermercado abaixo
+				(ex.: "473ml", "1kg", "350g", "2l"). As descrições vêm de notas fiscais e
+				podem estar abreviadas ou cortadas.
+
+				Só responda o tamanho se tiver segurança (ex.: produto com embalagem única
+				conhecida). Se não souber, use null. Não chute.
+
+				FORMATO DE RESPOSTA (apenas JSON):
+				{"itens": [{"indice": 1, "tamanho": "473ml"}, {"indice": 2, "tamanho": null}]}
+
+				ITENS:
+			"""
+		) + linhas
+		return {
+			"model": modelo,
+			"temperature": self.temperature,
+			"max_tokens": self.max_tokens,
+			"messages": [
+				{"role": "system", "content": "Você responde apenas com JSON válido."},
+				{"role": "user", "content": prompt.strip()},
+			],
+		}
 
 	def _executar_chamada(
 		self,
@@ -638,11 +717,14 @@ class LLMClassifier:
 				2. Extraia nome e marca base do produto quando possível
 				3. Seja objetivo nas justificativas (máx 5 palavras)
 				4. Responda APENAS com JSON válido
+				5. "tamanho": peso ou volume da embalagem (ex.: "473ml", "1kg") de item
+				   vendido por unidade, só se tiver segurança; senão null. Para item
+				   vendido por KG ou L, use null (a quantidade já é a medida)
 
 				FORMATO DE RESPOSTA:
 				{{
 					"itens": [
-						{{"sequencia": 1, "categoria": "alimentacao", "confianca": 0.84, "produto": {{"nome_base": "Arroz tipo 1", "marca_base": "Tio João"}}, "justificativa": "alimento básico"}}
+						{{"sequencia": 1, "categoria": "alimentacao", "confianca": 0.84, "produto": {{"nome_base": "Arroz tipo 1", "marca_base": "Tio João"}}, "tamanho": "5kg", "justificativa": "alimento básico"}}
 					]
 				}}
 
@@ -704,9 +786,11 @@ class LLMClassifier:
 			if isinstance(produto_info, dict):
 				produto_nome = produto_info.get("nome_base") or produto_info.get("nome")
 				produto_marca = produto_info.get("marca_base") or produto_info.get("marca")
+				tamanho = entrada.get("tamanho") or produto_info.get("tamanho")
 			else:
 				produto_nome = entrada.get("produto_nome")
 				produto_marca = entrada.get("produto_marca")
+				tamanho = entrada.get("tamanho")
 
 			mapeamento[sequencia_int] = _RespostaLLM(
 				categoria=str(categoria),
@@ -714,6 +798,7 @@ class LLMClassifier:
 				justificativa=cast(str | None, entrada.get("justificativa") or entrada.get("motivo")),
 				produto_nome=cast(str | None, produto_nome),
 				produto_marca=cast(str | None, produto_marca),
+				tamanho=_tamanho_valido(tamanho),
 			)
 		return mapeamento
 
@@ -770,6 +855,32 @@ def _normalizar_categoria(valor: object | None) -> str | None:
 		return None
 	texto = str(valor).strip()
 	return texto or None
+
+
+def _tamanho_valido(valor: object | None) -> str | None:
+	"""Tamanho respondido pela IA ("473ml" → "473ML"), ou None se não for peso/volume."""
+	if not isinstance(valor, str):
+		return None
+	texto = " ".join(valor.upper().split())
+	return texto if extrair_tamanho(texto) else None
+
+
+def _interpretar_tamanhos(conteudo: str) -> dict[int, str]:
+	"""Resposta de sugerir_tamanhos: {índice: tamanho válido}."""
+	dados = json.loads(_extrair_json_text(conteudo)) if conteudo else {}
+	itens_dados = dados.get("itens", []) if isinstance(dados, dict) else dados
+	tamanhos: dict[int, str] = {}
+	for entrada in itens_dados if isinstance(itens_dados, list) else []:
+		if not isinstance(entrada, dict):
+			continue
+		tamanho = _tamanho_valido(entrada.get("tamanho"))
+		try:
+			indice = int(entrada.get("indice"))
+		except (TypeError, ValueError):
+			continue
+		if tamanho:
+			tamanhos[indice] = tamanho
+	return tamanhos
 
 
 def _normalizar_conf(valor: object | None) -> float | None:
