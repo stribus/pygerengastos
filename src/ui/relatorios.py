@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -63,6 +63,22 @@ def _gerar_meses_periodo(data_inicio_str: str, data_fim_str: str) -> list[str]:
         end=data_fim,
         freq="M",
     ).strftime("%Y-%m").tolist()
+
+
+def _periodo_padrao(meses_com_notas: list[str], hoje: date) -> tuple[date, date]:
+    """Período padrão dos relatórios: os 12 meses até o último mês com nota.
+
+    Terminar no mês atual deixaria o período vazio quando as notas pararem de
+    ser importadas; sem nenhuma nota, os 12 meses terminam hoje.
+    """
+    if meses_com_notas:
+        ultimo_mes = pd.Period(meses_com_notas[-1], freq="M")
+        data_fim = ultimo_mes.end_time.date()
+    else:
+        ultimo_mes = pd.Period(hoje, freq="M")
+        data_fim = hoje
+
+    return (ultimo_mes - 11).start_time.date(), data_fim
 
 
 def _preencher_meses_faltantes(
@@ -270,36 +286,55 @@ def _aplicar_backfill(
     )
 
 
+def _quantidades_fixas_cesta(
+    quantidades: list[dict[str, Any]],
+    produtos: list[str],
+) -> dict[str, float]:
+    """Quantidade mensal de cada produto na cesta, na medida base (kg, l, un).
+
+    É a média das quantidades compradas nos meses com compra no período (mês sem
+    compra não conta como zero). ``quantidades`` é a saída de
+    obter_quantidades_mensais_produtos.
+    """
+    df = pd.DataFrame(quantidades)
+    if df.empty:
+        return {}
+
+    df = df[df["produto_nome"].isin(produtos)]
+    por_mes = df.groupby(["produto_nome", "ano_mes"])["quantidade_total"].sum()
+    return por_mes.groupby("produto_nome").mean().to_dict()
+
+
 def _calcular_cesta_basica_personalizada(
     df_completo: pd.DataFrame,
-    produtos_regulares: list[str],
+    produtos: list[str],
+    quantidades_fixas: dict[str, float],
 ) -> pd.DataFrame:
-    """Calcula custo médio mensal da cesta a partir da média simples dos custos unitários.
+    """Custo mensal da cesta (Laspeyres): Σ quantidade fixa × preço do mês.
 
-    Espera receber as séries com backfill (_aplicar_backfill), o que garante a
-    composição constante da cesta em todos os meses. Não há ponderação por
-    quantidade: assume-se quantidade = 1 para todos os produtos regulares em cada
-    mês. Retorna DataFrame com: ano_mes, custo_cesta (valor médio simples dos
-    custos unitários).
+    As quantidades (_quantidades_fixas_cesta) ficam fixas em todo o período, de
+    modo que a variação do custo vem só dos preços, ponderada pelo quanto se
+    compra de cada produto. Espera as séries com backfill (_aplicar_backfill),
+    que dão preço a todos os produtos em todos os meses; mês em que falta o
+    preço de algum produto fica sem custo, em vez de somar a cesta incompleta.
+    Retorna DataFrame com: ano_mes, custo_cesta.
     """
-    # Filtrar apenas produtos regulares
-    df_regulares = df_completo[df_completo["produto_nome"].isin(produtos_regulares)]
+    produtos = [p for p in produtos if p in quantidades_fixas]
+    df = df_completo[df_completo["produto_nome"].isin(produtos)]
 
-    if df_regulares.empty:
+    if df.empty:
         return pd.DataFrame(columns=["ano_mes", "custo_cesta"])
 
-    # Para cada produto, calcular quantidade média mensal
-    # (simplificação: assumir quantidade = 1 para todos, pois não temos no df)
-    # Em implementação real, deveria buscar quantidade média do banco
+    precos = df.pivot_table(
+        index="ano_mes",
+        columns="produto_nome",
+        values="custo_unitario_medio",
+        aggfunc="mean",
+    )
+    quantidades = pd.Series(quantidades_fixas)[precos.columns]
+    custo = (precos * quantidades).sum(axis=1, skipna=False)
 
-    # Calcular custo médio mensal da cesta
-    resultado = df_regulares.groupby("ano_mes").agg({
-        "custo_unitario_medio": "mean"
-    }).reset_index()
-
-    resultado.columns = ["ano_mes", "custo_cesta"]
-
-    return resultado
+    return custo.rename("custo_cesta").rename_axis("ano_mes").reset_index()
 
 
 def _montar_series_inflacao(
@@ -357,54 +392,48 @@ def _calcular_inflacao_media(
 
 def _montar_tabela_composicao_cesta(
     quantidades: list[dict[str, Any]],
-    df_completo: pd.DataFrame,
+    custos: list[dict[str, Any]],
+    df_precos_cesta: pd.DataFrame,
     produtos_cesta: list[str],
     unidades: dict[str, str],
 ) -> pd.DataFrame:
     """Monta a tabela "Composição da Cesta Básica" para os ``produtos_cesta``.
 
     ``produtos_cesta`` deve ser a mesma base usada no gráfico (regulares ou, no
-    fallback, todos os produtos com preço), tanto para as quantidades quanto
-    para o preço médio. Retorna DataFrame vazio se não houver quantidades.
+    fallback, todos os produtos com preço). O preço médio usa só os meses com
+    compra (``custos``, saída de obter_custos_unitarios_mensais); o custo usa o
+    preço do último mês das séries da cesta (``df_precos_cesta``), de modo que
+    o total da tabela é o custo da cesta nesse mês, igual ao do gráfico e do
+    CSV. Retorna DataFrame vazio se não houver quantidades.
     """
     colunas = [
         "Produto",
         "Unidade",
-        "Quantidade Média Mensal",
+        "Quantidade Mensal",
         "Preço Médio",
-        "Custo Mensal Médio",
+        "Preço no Último Mês",
+        "Custo no Último Mês",
     ]
 
-    # Reutilizar as quantidades mensais já buscadas, filtrando a base da cesta
-    df_qtd = pd.DataFrame(quantidades)
-    if not df_qtd.empty:
-        df_qtd = df_qtd[df_qtd["produto_nome"].isin(produtos_cesta)]
-
-    if df_qtd.empty:
+    quantidades_fixas = _quantidades_fixas_cesta(quantidades, produtos_cesta)
+    if not quantidades_fixas:
         return pd.DataFrame(columns=colunas)
 
-    # Calcular média mensal por produto
-    media_mensal = df_qtd.groupby("produto_nome").agg({
-        "quantidade_total": "mean"
-    }).reset_index()
-    media_mensal.columns = ["Produto", "Quantidade Média Mensal"]
+    df_custos = pd.DataFrame(custos)
+    preco_medio = df_custos.groupby("produto_nome")["custo_unitario_medio"].mean()
 
-    # Adicionar unidades
-    media_mensal["Unidade"] = media_mensal["Produto"].map(unidades)
+    ultimo_mes = df_precos_cesta["ano_mes"].max()
+    preco_ultimo_mes = df_precos_cesta[df_precos_cesta["ano_mes"] == ultimo_mes].set_index(
+        "produto_nome"
+    )["custo_unitario_medio"]
 
-    # Adicionar preço médio no período
-    df_precos = df_completo[df_completo["produto_nome"].isin(produtos_cesta)]
-    preco_medio = df_precos.groupby("produto_nome").agg({
-        "custo_unitario_medio": "mean"
-    }).reset_index()
-    preco_medio.columns = ["Produto", "Preço Médio"]
-
-    # Juntar informações
-    tabela_cesta = media_mensal.merge(preco_medio, on="Produto")
-
-    # Calcular custo médio mensal
-    tabela_cesta["Custo Mensal Médio"] = (
-        tabela_cesta["Quantidade Média Mensal"] * tabela_cesta["Preço Médio"]
+    tabela_cesta = pd.DataFrame({"Produto": list(quantidades_fixas)})
+    tabela_cesta["Unidade"] = tabela_cesta["Produto"].map(unidades)
+    tabela_cesta["Quantidade Mensal"] = tabela_cesta["Produto"].map(quantidades_fixas)
+    tabela_cesta["Preço Médio"] = tabela_cesta["Produto"].map(preco_medio)
+    tabela_cesta["Preço no Último Mês"] = tabela_cesta["Produto"].map(preco_ultimo_mes)
+    tabela_cesta["Custo no Último Mês"] = (
+        tabela_cesta["Quantidade Mensal"] * tabela_cesta["Preço no Último Mês"]
     )
 
     return tabela_cesta[colunas]
@@ -421,9 +450,10 @@ def render_grafico_custos_unitarios() -> None:
     # Filtros de período
     col1, col2 = st.columns(2)
 
-    # Período padrão: últimos 12 meses
-    data_fim_padrao = datetime.now().date()
-    data_inicio_padrao = data_fim_padrao - timedelta(days=365)
+    # Período padrão: 12 meses até o último mês com nota
+    data_inicio_padrao, data_fim_padrao = _periodo_padrao(
+        obter_meses_com_notas(), datetime.now().date()
+    )
 
     with col1:
         data_inicio = st.date_input(
@@ -541,12 +571,10 @@ def render_grafico_inflacao() -> None:
     # Filtros de período
     col1, col2 = st.columns(2)
 
-    # Período padrão: últimos 12 meses completos (até final do mês anterior)
-    hoje = datetime.now().date()
-    # Último dia do mês anterior
-    data_fim_padrao = hoje.replace(day=1) - timedelta(days=1)
-    # 12 meses antes, início do mês
-    data_inicio_padrao = (data_fim_padrao.replace(day=1) - timedelta(days=365)).replace(day=1)
+    # Período padrão: 12 meses até o último mês com nota
+    data_inicio_padrao, data_fim_padrao = _periodo_padrao(
+        obter_meses_com_notas(), datetime.now().date()
+    )
 
     with col1:
         data_inicio = st.date_input(
@@ -681,8 +709,11 @@ def render_grafico_inflacao() -> None:
     else:
         inflacao_media = [float('nan')] * len(meses_ordenados)
 
-    # Calcular cesta básica personalizada (séries com backfill)
-    df_cesta = _calcular_cesta_basica_personalizada(df_backfilled, produtos_para_agregados)
+    # Calcular cesta básica personalizada (séries com backfill, quantidades fixas)
+    quantidades_cesta = _quantidades_fixas_cesta(quantidades, produtos_para_agregados)
+    df_cesta = _calcular_cesta_basica_personalizada(
+        df_backfilled, produtos_para_agregados, quantidades_cesta
+    )
     if not df_cesta.empty:
         inflacao_cesta_lista = _calcular_inflacao_acumulada(df_cesta, coluna_valor="custo_cesta")
         # Alinhar com meses_ordenados usando mapeamento correto
@@ -877,32 +908,43 @@ def render_grafico_inflacao() -> None:
                 if usando_fallback
                 else "(produtos comprados com frequência nos últimos 6 meses com notas) "
             )
-            + "e as quantidades médias mensais."
+            + "e a quantidade mensal de cada um."
         )
 
         tabela_cesta = _montar_tabela_composicao_cesta(
-            quantidades, df_completo, produtos_para_agregados, unidades
+            quantidades, custos, df_backfilled, produtos_para_agregados, unidades
         )
 
         if not tabela_cesta.empty:
-            # Adicionar linha de total
-            total_custo = tabela_cesta["Custo Mensal Médio"].sum()
+            # Total = custo da cesta no último mês (o mesmo do gráfico e do CSV)
+            total_custo = tabela_cesta["Custo no Último Mês"].sum()
+            inflacao_periodo = inflacao_cesta[-1]
 
             # Exibir tabela
             st.dataframe(
                 tabela_cesta.style.format({
-                    "Quantidade Média Mensal": "{:.2f}",
+                    "Quantidade Mensal": "{:.2f}",
                     "Preço Médio": "R$ {:.2f}",
-                    "Custo Mensal Médio": "R$ {:.2f}",
+                    "Preço no Último Mês": "R$ {:.2f}",
+                    "Custo no Último Mês": "R$ {:.2f}",
                 }),
                 width='stretch',
                 hide_index=True,
             )
 
             st.metric(
-                "💰 Custo Total Médio Mensal da Cesta",
+                f"💰 Custo da Cesta em {meses_ordenados[-1]}",
                 f"R$ {total_custo:.2f}",
-                help="Soma dos custos mensais médios de todos os produtos da cesta"
+                delta=(
+                    None
+                    if pd.isna(inflacao_periodo)
+                    else f"{inflacao_periodo:+.1f}% desde {meses_ordenados[0]}"
+                ),
+                delta_color="inverse",
+                help=(
+                    "Soma de quantidade mensal × preço no último mês de todos os "
+                    "produtos da cesta"
+                ),
             )
 
             # Explicação adicional
@@ -919,22 +961,32 @@ def render_grafico_inflacao() -> None:
                 Se nenhum produto atingir o critério no período, a cesta e a inflação média
                 passam a usar **todos os produtos** do top, com um aviso acima do gráfico.
 
-                **Quantidade Média Mensal:** Média de quantidade comprada por mês, considerando
-                os meses com compra no período selecionado (não confundir com a média da janela
-                de 6 meses, usada apenas no critério de regularidade).
+                **Quantidade Mensal:** Média da quantidade comprada por mês, considerando
+                só os meses com compra no período selecionado (não confundir com a média da
+                janela de 6 meses, usada apenas no critério de regularidade). Ela fica fixa
+                em todos os meses da cesta.
 
-                **Preço Médio:** Preço médio do produto no período, por quilo, litro ou
-                unidade. Produtos vendidos por unidade com o tamanho na descrição
-                ("ARROZ 5KG", "CERVEJA 473ML") entram pelo peso ou volume; compras em
-                outra medida (ex.: descrição sem o tamanho) ficam de fora.
+                **Preço Médio:** Média dos preços do produto nos meses em que houve compra,
+                por quilo, litro ou unidade. Produtos vendidos por unidade com o tamanho na
+                descrição ("ARROZ 5KG", "CERVEJA 473ML") entram pelo peso ou volume; compras
+                em outra medida (ex.: descrição sem o tamanho) ficam de fora.
 
-                **Custo Mensal Médio:** Quantidade média × Preço médio.
+                **Preço no Último Mês:** Preço usado na cesta no último mês do período; sem
+                compra nesse mês, vale o último preço pago.
 
-                **Inflação da Cesta:** Calculada sobre a média dos custos unitários de todos
-                os produtos regulares mês a mês. Para meses anteriores à primeira compra de
-                um produto, o primeiro preço conhecido é usado como preço original
-                (contribuindo 0% de inflação), mantendo a composição da cesta constante
-                em todo o período.
+                **Custo no Último Mês:** Quantidade mensal × Preço no último mês. A soma é o
+                custo da cesta nesse mês, o mesmo do gráfico e do CSV.
+
+                **Custo e Inflação da Cesta:** Em cada mês, o custo da cesta é a soma de
+                quantidade mensal × preço do mês de todos os produtos. Como as quantidades
+                ficam fixas, o custo só muda com os preços, e cada produto pesa pelo quanto
+                você gasta com ele: um item caro e comprado raramente pesa pouco. Em mês
+                sem compra, vale o último preço pago; para meses anteriores à primeira
+                compra de um produto, o primeiro preço conhecido é usado como preço
+                original (contribuindo 0% de inflação).
+
+                **Inflação Média:** Média simples da inflação de cada produto, sem
+                ponderação por quantidade.
                 """)
         else:
             st.info("Não há dados de quantidade disponíveis para os produtos da cesta.")
